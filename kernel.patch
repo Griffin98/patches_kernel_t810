@@ -1,0 +1,1329 @@
+diff -duprN mm/kernel/audit.c n/kernel/audit.c
+--- mm/kernel/audit.c	2016-09-20 17:40:00.000000000 +0530
++++ n/kernel/audit.c	2017-03-31 10:42:41.000000000 +0530
+@@ -67,9 +67,11 @@
+ 
+ #include "audit.h"
+ 
++// [ SEC_SELINUX_PORTING_EXYNOS
+ #ifdef CONFIG_SEC_AVC_LOG
+ #include <linux/sec_debug.h>
+ #endif
++// ] SEC_SELINUX_PORTING_EXYNOS
+ 
+ /* No auditing will take place until audit_initialized == AUDIT_INITIALIZED.
+  * (Initialization happens after skb_init is called.) */
+@@ -369,14 +371,22 @@ static void audit_hold_skb(struct sk_buf
+  */
+ static void audit_printk_skb(struct sk_buff *skb)
+ {
+-#ifdef CONFIG_SEC_AVC_LOG
+ 	struct nlmsghdr *nlh = nlmsg_hdr(skb);
+ 	char *data = nlmsg_data(nlh);
+ 
+ 	if (nlh->nlmsg_type != AUDIT_EOE && nlh->nlmsg_type != AUDIT_NETFILTER_CFG) {
++// [ SEC_SELINUX_PORTING_EXYNOS
++#ifdef CONFIG_SEC_AVC_LOG
+ 		sec_debug_avc_log("type=%d %s\n", nlh->nlmsg_type, data);
+-	}
++#else
++		if (printk_ratelimit())
++			pr_notice("type=%d %s\n", nlh->nlmsg_type, data);
++		else
++			audit_log_lost("printk limit exceeded\n");
+ #endif
++// ] SEC_SELINUX_PORTING_EXYNOS
++	}
++
+ 	audit_hold_skb(skb);
+ }
+ 
+@@ -394,6 +404,7 @@ static void kauditd_send_skb(struct sk_b
+ 		/* we might get lucky and get this in the next auditd */
+ 		audit_hold_skb(skb);
+ 	} else {
++// [ SEC_SELINUX_PORTING_EXYNOS
+ #ifdef CONFIG_SEC_AVC_LOG
+ 		struct nlmsghdr *nlh = nlmsg_hdr(skb);
+ 		char *data = NLMSG_DATA(nlh);
+@@ -402,6 +413,7 @@ static void kauditd_send_skb(struct sk_b
+ 			sec_debug_avc_log("%s\n", data);
+ 		}
+ #endif
++// ] SEC_SELINUX_PORTING_EXYNOS
+ 		/* drop the extra reference if sent ok */
+ 		consume_skb(skb);
+ 	}
+diff -duprN mm/kernel/auditsc.c n/kernel/auditsc.c
+--- mm/kernel/auditsc.c	2016-09-20 17:40:00.000000000 +0530
++++ n/kernel/auditsc.c	2017-03-31 10:42:41.000000000 +0530
+@@ -69,7 +69,7 @@
+ #include <linux/fs_struct.h>
+ #include <linux/compat.h>
+ #include <linux/ctype.h>
+-#include <asm/unistd.h>
++#include <linux/uaccess.h>
+ 
+ #include "audit.h"
+ 
+@@ -78,7 +78,8 @@
+ #define AUDITSC_SUCCESS 1
+ #define AUDITSC_FAILURE 2
+ 
+-/* no execve audit message should be longer than this (userspace limits) */
++/* no execve audit message should be longer than this (userspace limits),
++ * see the note near the top of audit_log_execve_info() about this value */
+ #define MAX_EXECVE_AUDIT_LEN 7500
+ 
+ /* max length to print of cmdline/proctitle value during audit */
+@@ -1023,189 +1024,184 @@ static int audit_log_pid_context(struct
+ 	return rc;
+ }
+ 
+-/*
+- * to_send and len_sent accounting are very loose estimates.  We aren't
+- * really worried about a hard cap to MAX_EXECVE_AUDIT_LEN so much as being
+- * within about 500 bytes (next page boundary)
+- *
+- * why snprintf?  an int is up to 12 digits long.  if we just assumed when
+- * logging that a[%d]= was going to be 16 characters long we would be wasting
+- * space in every audit message.  In one 7500 byte message we can log up to
+- * about 1000 min size arguments.  That comes down to about 50% waste of space
+- * if we didn't do the snprintf to find out how long arg_num_len was.
+- */
+-static int audit_log_single_execve_arg(struct audit_context *context,
+-					struct audit_buffer **ab,
+-					int arg_num,
+-					size_t *len_sent,
+-					const char __user *p,
+-					char *buf)
++static void audit_log_execve_info(struct audit_context *context,
++				  struct audit_buffer **ab,
++				  struct audit_aux_data_execve *axi)
+ {
+-	char arg_num_len_buf[12];
+-	const char __user *tmp_p = p;
+-	/* how many digits are in arg_num? 5 is the length of ' a=""' */
+-	size_t arg_num_len = snprintf(arg_num_len_buf, 12, "%d", arg_num) + 5;
+-	size_t len, len_left, to_send;
+-	size_t max_execve_audit_len = MAX_EXECVE_AUDIT_LEN;
+-	unsigned int i, has_cntl = 0, too_long = 0;
+-	int ret;
++	long len_max;
++	long len_rem;
++	long len_full;
++	long len_buf;
++	long len_abuf;
++	long len_tmp;
++	bool require_data;
++	bool encode;
++	unsigned int iter;
++	unsigned int arg;
++	char *buf_head;
++	char *buf;
++	const char __user *p;
+ 
+-	/* strnlen_user includes the null we don't want to send */
+-	len_left = len = strnlen_user(p, MAX_ARG_STRLEN) - 1;
++	/* NOTE: this buffer needs to be large enough to hold all the non-arg
++	 *       data we put in the audit record for this argument (see the
++	 *       code below) ... at this point in time 96 is plenty */
++	char abuf[96];
+ 
+-	/*
+-	 * We just created this mm, if we can't find the strings
+-	 * we just copied into it something is _very_ wrong. Similar
+-	 * for strings that are too long, we should not have created
+-	 * any.
+-	 */
+-	if (unlikely((len == -1) || len > MAX_ARG_STRLEN - 1)) {
+-		WARN_ON(1);
+-		send_sig(SIGKILL, current, 0);
+-		return -1;
+-	}
++	if (axi->mm != current->mm)
++		return; /* execve failed, no additional info */
+ 
+-	/* walk the whole argument looking for non-ascii chars */
+-	do {
+-		if (len_left > MAX_EXECVE_AUDIT_LEN)
+-			to_send = MAX_EXECVE_AUDIT_LEN;
+-		else
+-			to_send = len_left;
+-		ret = copy_from_user(buf, tmp_p, to_send);
+-		/*
+-		 * There is no reason for this copy to be short. We just
+-		 * copied them here, and the mm hasn't been exposed to user-
+-		 * space yet.
+-		 */
+-		if (ret) {
+-			WARN_ON(1);
+-			send_sig(SIGKILL, current, 0);
+-			return -1;
+-		}
+-		buf[to_send] = '\0';
+-		has_cntl = audit_string_contains_control(buf, to_send);
+-		if (has_cntl) {
+-			/*
+-			 * hex messages get logged as 2 bytes, so we can only
+-			 * send half as much in each message
+-			 */
+-			max_execve_audit_len = MAX_EXECVE_AUDIT_LEN / 2;
+-			break;
+-		}
+-		len_left -= to_send;
+-		tmp_p += to_send;
+-	} while (len_left > 0);
++	p = (const char __user *)axi->mm->arg_start;
+ 
+-	len_left = len;
++	/* NOTE: we set MAX_EXECVE_AUDIT_LEN to a rather arbitrary limit, the
++	 *       current value of 7500 is not as important as the fact that it
++	 *       is less than 8k, a setting of 7500 gives us plenty of wiggle
++	 *       room if we go over a little bit in the logging below */
++	WARN_ON_ONCE(MAX_EXECVE_AUDIT_LEN > 7500);
++	len_max = MAX_EXECVE_AUDIT_LEN;
+ 
+-	if (len > max_execve_audit_len)
+-		too_long = 1;
++	/* scratch buffer to hold the userspace args */
++	buf_head = kmalloc(MAX_EXECVE_AUDIT_LEN + 1, GFP_KERNEL);
++	if (!buf_head) {
++		audit_panic("out of memory for argv string");
++		return;
++	}
++	buf = buf_head;
+ 
+-	/* rewalk the argument actually logging the message */
+-	for (i = 0; len_left > 0; i++) {
+-		int room_left;
++	audit_log_format(*ab, "argc=%d", axi->argc);
+ 
+-		if (len_left > max_execve_audit_len)
+-			to_send = max_execve_audit_len;
+-		else
+-			to_send = len_left;
++	len_rem = len_max;
++	len_buf = 0;
++	len_full = 0;
++	require_data = true;
++	encode = false;
++	iter = 0;
++	arg = 0;
++	do {
++		/* NOTE: we don't ever want to trust this value for anything
++		 *       serious, but the audit record format insists we
++		 *       provide an argument length for really long arguments,
++		 *       e.g. > MAX_EXECVE_AUDIT_LEN, so we have no choice but
++		 *       to use strncpy_from_user() to obtain this value for
++		 *       recording in the log, although we don't use it
++		 *       anywhere here to avoid a double-fetch problem */
++		if (len_full == 0)
++			len_full = strnlen_user(p, MAX_ARG_STRLEN) - 1;
+ 
+-		/* do we have space left to send this argument in this ab? */
+-		room_left = MAX_EXECVE_AUDIT_LEN - arg_num_len - *len_sent;
+-		if (has_cntl)
+-			room_left -= (to_send * 2);
+-		else
+-			room_left -= to_send;
+-		if (room_left < 0) {
+-			*len_sent = 0;
+-			audit_log_end(*ab);
+-			*ab = audit_log_start(context, GFP_KERNEL, AUDIT_EXECVE);
+-			if (!*ab)
+-				return 0;
+-		}
++		/* read more data from userspace */
++		if (require_data) {
++			/* can we make more room in the buffer? */
++			if (buf != buf_head) {
++				memmove(buf_head, buf, len_buf);
++				buf = buf_head;
++			}
+ 
+-		/*
+-		 * first record needs to say how long the original string was
+-		 * so we can be sure nothing was lost.
+-		 */
+-		if ((i == 0) && (too_long))
+-			audit_log_format(*ab, " a%d_len=%zu", arg_num,
+-					 has_cntl ? 2*len : len);
++			/* fetch as much as we can of the argument */
++			len_tmp = strncpy_from_user(&buf_head[len_buf], p,
++						    len_max - len_buf);
++			if (len_tmp == -EFAULT) {
++				/* unable to copy from userspace */
++				send_sig(SIGKILL, current, 0);
++				goto out;
++			} else if (len_tmp == (len_max - len_buf)) {
++				/* buffer is not large enough */
++				require_data = true;
++				/* NOTE: if we are going to span multiple
++				 *       buffers force the encoding so we stand
++				 *       a chance at a sane len_full value and
++				 *       consistent record encoding */
++				encode = true;
++				len_full = len_full * 2;
++				p += len_tmp;
++			} else {
++				require_data = false;
++				if (!encode)
++					encode = audit_string_contains_control(
++								buf, len_tmp);
++				/* try to use a trusted value for len_full */
++				if (len_full < len_max)
++					len_full = (encode ?
++						    len_tmp * 2 : len_tmp);
++				p += len_tmp + 1;
++			}
++			len_buf += len_tmp;
++			buf_head[len_buf] = '\0';
+ 
+-		/*
+-		 * normally arguments are small enough to fit and we already
+-		 * filled buf above when we checked for control characters
+-		 * so don't bother with another copy_from_user
+-		 */
+-		if (len >= max_execve_audit_len)
+-			ret = copy_from_user(buf, p, to_send);
+-		else
+-			ret = 0;
+-		if (ret) {
+-			WARN_ON(1);
+-			send_sig(SIGKILL, current, 0);
+-			return -1;
++			/* length of the buffer in the audit record? */
++			len_abuf = (encode ? len_buf * 2 : len_buf + 2);
+ 		}
+-		buf[to_send] = '\0';
+ 
+-		/* actually log it */
+-		audit_log_format(*ab, " a%d", arg_num);
+-		if (too_long)
+-			audit_log_format(*ab, "[%d]", i);
+-		audit_log_format(*ab, "=");
+-		if (has_cntl)
+-			audit_log_n_hex(*ab, buf, to_send);
+-		else
+-			audit_log_string(*ab, buf);
+-
+-		p += to_send;
+-		len_left -= to_send;
+-		*len_sent += arg_num_len;
+-		if (has_cntl)
+-			*len_sent += to_send * 2;
+-		else
+-			*len_sent += to_send;
+-	}
+-	/* include the null we didn't log */
+-	return len + 1;
+-}
+-
+-static void audit_log_execve_info(struct audit_context *context,
+-				  struct audit_buffer **ab,
+-				  struct audit_aux_data_execve *axi)
+-{
+-	int i, len;
+-	size_t len_sent = 0;
+-	const char __user *p;
+-	char *buf;
++		/* write as much as we can to the audit log */
++		if (len_buf > 0) {
++			/* NOTE: some magic numbers here - basically if we
++			 *       can't fit a reasonable amount of data into the
++			 *       existing audit buffer, flush it and start with
++			 *       a new buffer */
++			if ((sizeof(abuf) + 8) > len_rem) {
++				len_rem = len_max;
++				audit_log_end(*ab);
++				*ab = audit_log_start(context,
++						      GFP_KERNEL, AUDIT_EXECVE);
++				if (!*ab)
++					goto out;
++			}
+ 
+-	if (axi->mm != current->mm)
+-		return; /* execve failed, no additional info */
++			/* create the non-arg portion of the arg record */
++			len_tmp = 0;
++			if (require_data || (iter > 0) ||
++			    ((len_abuf + sizeof(abuf)) > len_rem)) {
++				if (iter == 0) {
++					len_tmp += snprintf(&abuf[len_tmp],
++							sizeof(abuf) - len_tmp,
++							" a%d_len=%lu",
++							arg, len_full);
++				}
++				len_tmp += snprintf(&abuf[len_tmp],
++						    sizeof(abuf) - len_tmp,
++						    " a%d[%d]=", arg, iter++);
++			} else
++				len_tmp += snprintf(&abuf[len_tmp],
++						    sizeof(abuf) - len_tmp,
++						    " a%d=", arg);
++			WARN_ON(len_tmp >= sizeof(abuf));
++			abuf[sizeof(abuf) - 1] = '\0';
+ 
+-	p = (const char __user *)axi->mm->arg_start;
++			/* log the arg in the audit record */
++			audit_log_format(*ab, "%s", abuf);
++			len_rem -= len_tmp;
++			len_tmp = len_buf;
++			if (encode) {
++				if (len_abuf > len_rem)
++					len_tmp = len_rem / 2; /* encoding */
++				audit_log_n_hex(*ab, buf, len_tmp);
++				len_rem -= len_tmp * 2;
++				len_abuf -= len_tmp * 2;
++			} else {
++				if (len_abuf > len_rem)
++					len_tmp = len_rem - 2; /* quotes */
++				audit_log_n_string(*ab, buf, len_tmp);
++				len_rem -= len_tmp + 2;
++				/* don't subtract the "2" because we still need
++				 * to add quotes to the remaining string */
++				len_abuf -= len_tmp;
++			}
++			len_buf -= len_tmp;
++			buf += len_tmp;
++		}
+ 
+-	audit_log_format(*ab, "argc=%d", axi->argc);
++		/* ready to move to the next argument? */
++		if ((len_buf == 0) && !require_data) {
++			arg++;
++			iter = 0;
++			len_full = 0;
++			require_data = true;
++			encode = false;
++		}
++	} while (arg < axi->argc);
+ 
+-	/*
+-	 * we need some kernel buffer to hold the userspace args.  Just
+-	 * allocate one big one rather than allocating one of the right size
+-	 * for every single argument inside audit_log_single_execve_arg()
+-	 * should be <8k allocation so should be pretty safe.
+-	 */
+-	buf = kmalloc(MAX_EXECVE_AUDIT_LEN + 1, GFP_KERNEL);
+-	if (!buf) {
+-		audit_panic("out of memory for argv string\n");
+-		return;
+-	}
++	/* NOTE: the caller handles the final audit_log_end() call */
+ 
+-	for (i = 0; i < axi->argc; i++) {
+-		len = audit_log_single_execve_arg(context, ab, i,
+-						  &len_sent, p, buf);
+-		if (len <= 0)
+-			break;
+-		p += len;
+-	}
+-	kfree(buf);
++out:
++	kfree(buf_head);
+ }
+ 
+ static void show_special(struct audit_context *context, int *call_panic)
+@@ -1368,7 +1364,9 @@ static void audit_log_exit(struct audit_
+ 	/* tsk == current */
+ 	context->personality = tsk->personality;
+ 
+-	if (context->major != __NR_setsockopt) {
++// [ SEC_SELINUX_PORTING_COMMON
++	if (context->major != __NR_setsockopt  && context->major != 294 ) {
++// ] SEC_SELINUX_PORTING_COMMON
+ 	ab = audit_log_start(context, GFP_KERNEL, AUDIT_SYSCALL);
+ 	if (!ab)
+ 		return;		/* audit_panic has been called */
+@@ -1392,7 +1390,6 @@ static void audit_log_exit(struct audit_
+ 	audit_log_task_info(ab, tsk);
+ 	audit_log_key(ab, context->filterkey);
+ 	audit_log_end(ab);
+-	}
+ 
+ 	for (aux = context->aux; aux; aux = aux->next) {
+ 
+@@ -1479,9 +1476,10 @@ static void audit_log_exit(struct audit_
+ 	list_for_each_entry(n, &context->names_list, list)
+ 		audit_log_name(context, n, NULL, i++, &call_panic);
+ 
+-	if (context->major != __NR_setsockopt) {
+ 	audit_log_proctitle(tsk, context);
+-	}
++// [ SEC_SELINUX_PORTING_COMMON
++	} // End of context->major != __NR_setsockopt
++// ] SEC_SELINUX_PORTING_COMMON
+ 	/* Send end of event record to help user space know we are finished */
+ 	ab = audit_log_start(context, GFP_KERNEL, AUDIT_EOE);
+ 	if (ab)
+diff -duprN mm/kernel/cgroup.c n/kernel/cgroup.c
+--- mm/kernel/cgroup.c	2016-09-20 17:39:56.000000000 +0530
++++ n/kernel/cgroup.c	2017-03-31 10:42:41.000000000 +0530
+@@ -5431,7 +5431,7 @@ static int cgroup_css_links_read(struct
+ 		struct css_set *cg = link->cg;
+ 		struct task_struct *task;
+ 		int count = 0;
+-		seq_printf(seq, "css_set %p\n", cg);
++		seq_printf(seq, "css_set %pK\n", cg);
+ 		list_for_each_entry(task, &cg->tasks, cg_list) {
+ 			if (count++ > MAX_TASKS_SHOWN_PER_CSS) {
+ 				seq_puts(seq, "  ...\n");
+diff -duprN mm/kernel/cpu/idle.c n/kernel/cpu/idle.c
+--- mm/kernel/cpu/idle.c	2016-09-20 17:39:56.000000000 +0530
++++ n/kernel/cpu/idle.c	2017-03-31 10:42:41.000000000 +0530
+@@ -13,11 +13,6 @@
+ 
+ static int __read_mostly cpu_idle_force_poll;
+ 
+-#ifdef CONFIG_BATTERY_SWELLING_SELF_DISCHARGING
+-bool sdchg_idle_policy_set;
+-unsigned int sdchg_idle_poll_mask;
+-#endif
+-
+ void cpu_idle_poll_ctrl(bool enable)
+ {
+ 	if (enable) {
+@@ -72,9 +67,6 @@ void __weak arch_cpu_idle(void)
+  */
+ static void cpu_idle_loop(void)
+ {
+-#ifdef CONFIG_BATTERY_SWELLING_SELF_DISCHARGING
+-	bool sdchg_cpu_idle_force_poll = false;
+-#endif
+ 	while (1) {
+ 		tick_nohz_idle_enter();
+ 
+@@ -88,13 +80,6 @@ static void cpu_idle_loop(void)
+ 			local_irq_disable();
+ 			arch_cpu_idle_enter();
+ 
+-#ifdef CONFIG_BATTERY_SWELLING_SELF_DISCHARGING
+-			if (sdchg_idle_policy_set && 
+-				(sdchg_idle_poll_mask & (1 << raw_smp_processor_id())))
+-				sdchg_cpu_idle_force_poll = true;
+-			else
+-				sdchg_cpu_idle_force_poll = false;
+-#endif
+ 			/*
+ 			 * In poll mode we reenable interrupts and spin.
+ 			 *
+@@ -104,12 +89,7 @@ static void cpu_idle_loop(void)
+ 			 * know that the IPI is going to arrive right
+ 			 * away
+ 			 */
+-#ifdef CONFIG_BATTERY_SWELLING_SELF_DISCHARGING
+-			if (cpu_idle_force_poll || tick_check_broadcast_expired()
+-					|| sdchg_cpu_idle_force_poll) {
+-#else
+ 			if (cpu_idle_force_poll || tick_check_broadcast_expired()) {
+-#endif
+ 				cpu_idle_poll();
+ 			} else {
+ 				current_clr_polling();
+diff -duprN mm/kernel/events/core.c n/kernel/events/core.c
+--- mm/kernel/events/core.c	2016-09-20 17:40:01.000000000 +0530
++++ n/kernel/events/core.c	2017-03-31 10:42:41.000000000 +0530
+@@ -156,8 +156,13 @@ static struct srcu_struct pmus_srcu;
+  *   0 - disallow raw tracepoint access for unpriv
+  *   1 - disallow cpu events for unpriv
+  *   2 - disallow kernel profiling for unpriv
++ *   3 - disallow all unpriv perf event use
+  */
++#ifdef CONFIG_SECURITY_PERF_EVENTS_RESTRICT
++int sysctl_perf_event_paranoid __read_mostly = 3;
++#else
+ int sysctl_perf_event_paranoid __read_mostly = 1;
++#endif
+ 
+ /* Minimum for 512 kiB + 1 user control page */
+ int sysctl_perf_event_mlock __read_mostly = 512 + (PAGE_SIZE / 1024); /* 'free' kiB per user */
+@@ -707,6 +712,77 @@ static void put_ctx(struct perf_event_co
+ 	}
+ }
+ 
++/*
++ * Because of perf_event::ctx migration in sys_perf_event_open::move_group and
++ * perf_pmu_migrate_context() we need some magic.
++ *
++ * Those places that change perf_event::ctx will hold both
++ * perf_event_ctx::mutex of the 'old' and 'new' ctx value.
++ *
++ * Lock ordering is by mutex address. There is one other site where
++ * perf_event_context::mutex nests and that is put_event(). But remember that
++ * that is a parent<->child context relation, and migration does not affect
++ * children, therefore these two orderings should not interact.
++ *
++ * The change in perf_event::ctx does not affect children (as claimed above)
++ * because the sys_perf_event_open() case will install a new event and break
++ * the ctx parent<->child relation, and perf_pmu_migrate_context() is only
++ * concerned with cpuctx and that doesn't have children.
++ *
++ * The places that change perf_event::ctx will issue:
++ *
++ *   perf_remove_from_context();
++ *   synchronize_rcu();
++ *   perf_install_in_context();
++ *
++ * to affect the change. The remove_from_context() + synchronize_rcu() should
++ * quiesce the event, after which we can install it in the new location. This
++ * means that only external vectors (perf_fops, prctl) can perturb the event
++ * while in transit. Therefore all such accessors should also acquire
++ * perf_event_context::mutex to serialize against this.
++ *
++ * However; because event->ctx can change while we're waiting to acquire
++ * ctx->mutex we must be careful and use the below perf_event_ctx_lock()
++ * function.
++ *
++ * Lock order:
++ *	task_struct::perf_event_mutex
++ *	  perf_event_context::mutex
++ *	    perf_event_context::lock
++ *	    perf_event::child_mutex;
++ *	    perf_event::mmap_mutex
++ *	    mmap_sem
++ */
++static struct perf_event_context *perf_event_ctx_lock(struct perf_event *event)
++{
++	struct perf_event_context *ctx;
++
++again:
++	rcu_read_lock();
++	ctx = ACCESS_ONCE(event->ctx);
++	if (!atomic_inc_not_zero(&ctx->refcount)) {
++		rcu_read_unlock();
++		goto again;
++	}
++	rcu_read_unlock();
++
++	mutex_lock(&ctx->mutex);
++	if (event->ctx != ctx) {
++		mutex_unlock(&ctx->mutex);
++		put_ctx(ctx);
++		goto again;
++	}
++
++	return ctx;
++}
++
++static void perf_event_ctx_unlock(struct perf_event *event,
++				  struct perf_event_context *ctx)
++{
++	mutex_unlock(&ctx->mutex);
++	put_ctx(ctx);
++}
++
+ static void unclone_ctx(struct perf_event_context *ctx)
+ {
+ 	if (ctx->parent_ctx) {
+@@ -1152,10 +1228,17 @@ static void perf_group_detach(struct per
+ 	 * If this was a group event with sibling events then
+ 	 * upgrade the siblings to singleton events by adding them
+ 	 * to whatever list we are on.
++	 * If this isn't on a list, make sure we still remove the sibling's
++	 * group_entry from this sibling_list; otherwise, when that sibling
++	 * is later deallocated, it will try to remove itself from this
++	 * sibling_list, which may well have been deallocated already,
++	 * resulting in a use-after-free.
+ 	 */
+ 	list_for_each_entry_safe(sibling, tmp, &event->sibling_list, group_entry) {
+ 		if (list)
+ 			list_move_tail(&sibling->group_entry, list);
++		else
++			list_del_init(&sibling->group_entry);
+ 		sibling->group_leader = sibling;
+ 
+ 		/* Inherit group flags from the previous leader */
+@@ -1367,7 +1450,7 @@ int __perf_event_disable(void *info)
+  * is the current context on this CPU and preemption is disabled,
+  * hence we can't get into perf_event_task_sched_out for this context.
+  */
+-void perf_event_disable(struct perf_event *event)
++static void _perf_event_disable(struct perf_event *event)
+ {
+ 	struct perf_event_context *ctx = event->ctx;
+ 	struct task_struct *task = ctx->task;
+@@ -1408,6 +1491,19 @@ retry:
+ 	}
+ 	raw_spin_unlock_irq(&ctx->lock);
+ }
++
++/*
++ * Strictly speaking kernel users cannot create groups and therefore this
++ * interface does not need the perf_event_ctx_lock() magic.
++ */
++void perf_event_disable(struct perf_event *event)
++{
++	struct perf_event_context *ctx;
++
++	ctx = perf_event_ctx_lock(event);
++	_perf_event_disable(event);
++	perf_event_ctx_unlock(event, ctx);
++}
+ EXPORT_SYMBOL_GPL(perf_event_disable);
+ 
+ static void perf_set_shadow_time(struct perf_event *event,
+@@ -1849,7 +1945,7 @@ unlock:
+  * perf_event_for_each_child or perf_event_for_each as described
+  * for perf_event_disable.
+  */
+-void perf_event_enable(struct perf_event *event)
++static void _perf_event_enable(struct perf_event *event)
+ {
+ 	struct perf_event_context *ctx = event->ctx;
+ 	struct task_struct *task = ctx->task;
+@@ -1905,9 +2001,21 @@ retry:
+ out:
+ 	raw_spin_unlock_irq(&ctx->lock);
+ }
++
++/*
++ * See perf_event_disable();
++ */
++void perf_event_enable(struct perf_event *event)
++{
++	struct perf_event_context *ctx;
++
++	ctx = perf_event_ctx_lock(event);
++	_perf_event_enable(event);
++	perf_event_ctx_unlock(event, ctx);
++}
+ EXPORT_SYMBOL_GPL(perf_event_enable);
+ 
+-int perf_event_refresh(struct perf_event *event, int refresh)
++static int _perf_event_refresh(struct perf_event *event, int refresh)
+ {
+ 	/*
+ 	 * not supported on inherited events
+@@ -1916,10 +2024,25 @@ int perf_event_refresh(struct perf_event
+ 		return -EINVAL;
+ 
+ 	atomic_add(refresh, &event->event_limit);
+-	perf_event_enable(event);
++	_perf_event_enable(event);
+ 
+ 	return 0;
+ }
++
++/*
++ * See perf_event_disable()
++ */
++int perf_event_refresh(struct perf_event *event, int refresh)
++{
++	struct perf_event_context *ctx;
++	int ret;
++
++	ctx = perf_event_ctx_lock(event);
++	ret = _perf_event_refresh(event, refresh);
++	perf_event_ctx_unlock(event, ctx);
++
++	return ret;
++}
+ EXPORT_SYMBOL_GPL(perf_event_refresh);
+ 
+ static void ctx_sched_out(struct perf_event_context *ctx,
+@@ -3060,7 +3183,16 @@ static void put_event(struct perf_event
+ 	rcu_read_unlock();
+ 
+ 	if (owner) {
+-		mutex_lock(&owner->perf_event_mutex);
++		/*
++		 * If we're here through perf_event_exit_task() we're already
++		 * holding ctx->mutex which would be an inversion wrt. the
++		 * normal lock order.
++		 *
++		 * However we can safely take this lock because its the child
++		 * ctx->mutex.
++		 */
++		mutex_lock_nested(&owner->perf_event_mutex, SINGLE_DEPTH_NESTING);
++
+ 		/*
+ 		 * We have to re-check the event->owner field, if it is cleared
+ 		 * we raced with perf_event_exit_task(), acquiring the mutex
+@@ -3112,12 +3244,13 @@ static int perf_event_read_group(struct
+ 				   u64 read_format, char __user *buf)
+ {
+ 	struct perf_event *leader = event->group_leader, *sub;
+-	int n = 0, size = 0, ret = -EFAULT;
+ 	struct perf_event_context *ctx = leader->ctx;
+-	u64 values[5];
++	int n = 0, size = 0, ret;
+ 	u64 count, enabled, running;
++	u64 values[5];
++
++	lockdep_assert_held(&ctx->mutex);
+ 
+-	mutex_lock(&ctx->mutex);
+ 	count = perf_event_read_value(leader, &enabled, &running);
+ 
+ 	values[n++] = 1 + leader->nr_siblings;
+@@ -3132,7 +3265,7 @@ static int perf_event_read_group(struct
+ 	size = n * sizeof(u64);
+ 
+ 	if (copy_to_user(buf, values, size))
+-		goto unlock;
++		return -EFAULT;
+ 
+ 	ret = size;
+ 
+@@ -3146,14 +3279,11 @@ static int perf_event_read_group(struct
+ 		size = n * sizeof(u64);
+ 
+ 		if (copy_to_user(buf + ret, values, size)) {
+-			ret = -EFAULT;
+-			goto unlock;
++			return -EFAULT;
+ 		}
+ 
+ 		ret += size;
+ 	}
+-unlock:
+-	mutex_unlock(&ctx->mutex);
+ 
+ 	return ret;
+ }
+@@ -3212,8 +3342,14 @@ static ssize_t
+ perf_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
+ {
+ 	struct perf_event *event = file->private_data;
++	struct perf_event_context *ctx;
++	int ret;
+ 
+-	return perf_read_hw(event, buf, count);
++	ctx = perf_event_ctx_lock(event);
++	ret = perf_read_hw(event, buf, count);
++	perf_event_ctx_unlock(event, ctx);
++
++	return ret;
+ }
+ 
+ static unsigned int perf_poll(struct file *file, poll_table *wait)
+@@ -3237,7 +3373,7 @@ static unsigned int perf_poll(struct fil
+ 	return events;
+ }
+ 
+-static void perf_event_reset(struct perf_event *event)
++static void _perf_event_reset(struct perf_event *event)
+ {
+ 	(void)perf_event_read(event);
+ 	local64_set(&event->count, 0);
+@@ -3256,6 +3392,7 @@ static void perf_event_for_each_child(st
+ 	struct perf_event *child;
+ 
+ 	WARN_ON_ONCE(event->ctx->parent_ctx);
++
+ 	mutex_lock(&event->child_mutex);
+ 	func(event);
+ 	list_for_each_entry(child, &event->child_list, child_list)
+@@ -3269,14 +3406,13 @@ static void perf_event_for_each(struct p
+ 	struct perf_event_context *ctx = event->ctx;
+ 	struct perf_event *sibling;
+ 
+-	WARN_ON_ONCE(ctx->parent_ctx);
+-	mutex_lock(&ctx->mutex);
++	lockdep_assert_held(&ctx->mutex);
++
+ 	event = event->group_leader;
+ 
+ 	perf_event_for_each_child(event, func);
+ 	list_for_each_entry(sibling, &event->sibling_list, group_entry)
+ 		perf_event_for_each_child(sibling, func);
+-	mutex_unlock(&ctx->mutex);
+ }
+ 
+ static int perf_event_period(struct perf_event *event, u64 __user *arg)
+@@ -3332,25 +3468,24 @@ static int perf_event_set_output(struct
+ 				 struct perf_event *output_event);
+ static int perf_event_set_filter(struct perf_event *event, void __user *arg);
+ 
+-static long perf_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
++static long _perf_ioctl(struct perf_event *event, unsigned int cmd, unsigned long arg)
+ {
+-	struct perf_event *event = file->private_data;
+ 	void (*func)(struct perf_event *);
+ 	u32 flags = arg;
+ 
+ 	switch (cmd) {
+ 	case PERF_EVENT_IOC_ENABLE:
+-		func = perf_event_enable;
++		func = _perf_event_enable;
+ 		break;
+ 	case PERF_EVENT_IOC_DISABLE:
+-		func = perf_event_disable;
++		func = _perf_event_disable;
+ 		break;
+ 	case PERF_EVENT_IOC_RESET:
+-		func = perf_event_reset;
++		func = _perf_event_reset;
+ 		break;
+ 
+ 	case PERF_EVENT_IOC_REFRESH:
+-		return perf_event_refresh(event, arg);
++		return _perf_event_refresh(event, arg);
+ 
+ 	case PERF_EVENT_IOC_PERIOD:
+ 		return perf_event_period(event, (u64 __user *)arg);
+@@ -3388,13 +3523,30 @@ static long perf_ioctl(struct file *file
+ 	return 0;
+ }
+ 
++static long perf_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
++{
++	struct perf_event *event = file->private_data;
++	struct perf_event_context *ctx;
++	long ret;
++
++	ctx = perf_event_ctx_lock(event);
++	ret = _perf_ioctl(event, cmd, arg);
++	perf_event_ctx_unlock(event, ctx);
++
++	return ret;
++}
++
+ int perf_event_task_enable(void)
+ {
++	struct perf_event_context *ctx;
+ 	struct perf_event *event;
+ 
+ 	mutex_lock(&current->perf_event_mutex);
+-	list_for_each_entry(event, &current->perf_event_list, owner_entry)
+-		perf_event_for_each_child(event, perf_event_enable);
++	list_for_each_entry(event, &current->perf_event_list, owner_entry) {
++		ctx = perf_event_ctx_lock(event);
++		perf_event_for_each_child(event, _perf_event_enable);
++		perf_event_ctx_unlock(event, ctx);
++	}
+ 	mutex_unlock(&current->perf_event_mutex);
+ 
+ 	return 0;
+@@ -3402,11 +3554,15 @@ int perf_event_task_enable(void)
+ 
+ int perf_event_task_disable(void)
+ {
++	struct perf_event_context *ctx;
+ 	struct perf_event *event;
+ 
+ 	mutex_lock(&current->perf_event_mutex);
+-	list_for_each_entry(event, &current->perf_event_list, owner_entry)
+-		perf_event_for_each_child(event, perf_event_disable);
++	list_for_each_entry(event, &current->perf_event_list, owner_entry) {
++		ctx = perf_event_ctx_lock(event);
++		perf_event_for_each_child(event, _perf_event_disable);
++		perf_event_ctx_unlock(event, ctx);
++	}
+ 	mutex_unlock(&current->perf_event_mutex);
+ 
+ 	return 0;
+@@ -6544,6 +6700,15 @@ out:
+ 	return ret;
+ }
+ 
++static void mutex_lock_double(struct mutex *a, struct mutex *b)
++{
++	if (b < a)
++		swap(a, b);
++
++	mutex_lock(a);
++	mutex_lock_nested(b, SINGLE_DEPTH_NESTING);
++}
++
+ /**
+  * sys_perf_event_open - open a performance event, associate it to a task/cpu
+  *
+@@ -6559,7 +6724,7 @@ SYSCALL_DEFINE5(perf_event_open,
+ 	struct perf_event *group_leader = NULL, *output_event = NULL;
+ 	struct perf_event *event, *sibling;
+ 	struct perf_event_attr attr;
+-	struct perf_event_context *ctx;
++	struct perf_event_context *ctx, *uninitialized_var(gctx);
+ 	struct file *event_file = NULL;
+ 	struct fd group = {NULL, 0};
+ 	struct task_struct *task = NULL;
+@@ -6572,6 +6737,9 @@ SYSCALL_DEFINE5(perf_event_open,
+ 	if (flags & ~PERF_FLAG_ALL)
+ 		return -EINVAL;
+ 
++	if (perf_paranoid_any() && !capable(CAP_SYS_ADMIN))
++		return -EACCES;
++
+ 	err = perf_copy_attr(attr_uptr, &attr);
+ 	if (err)
+ 		return err;
+@@ -6727,9 +6895,14 @@ SYSCALL_DEFINE5(perf_event_open,
+ 	}
+ 
+ 	if (move_group) {
+-		struct perf_event_context *gctx = group_leader->ctx;
++		gctx = group_leader->ctx;
++
++		/*
++		 * See perf_event_ctx_lock() for comments on the details
++		 * of swizzling perf_event::ctx.
++		 */
++		mutex_lock_double(&gctx->mutex, &ctx->mutex);
+ 
+-		mutex_lock(&gctx->mutex);
+ 		perf_remove_from_context(group_leader);
+ 
+ 		/*
+@@ -6744,15 +6917,19 @@ SYSCALL_DEFINE5(perf_event_open,
+ 			perf_event__state_init(sibling);
+ 			put_ctx(gctx);
+ 		}
+-		mutex_unlock(&gctx->mutex);
+-		put_ctx(gctx);
++	} else {
++		mutex_lock(&ctx->mutex);
+ 	}
+ 
+ 	WARN_ON_ONCE(ctx->parent_ctx);
+-	mutex_lock(&ctx->mutex);
+ 
+ 	if (move_group) {
++		/*
++		 * Wait for everybody to stop referencing the events through
++		 * the old lists, before installing it on new lists.
++		 */
+ 		synchronize_rcu();
++
+ 		perf_install_in_context(ctx, group_leader, event->cpu);
+ 		get_ctx(ctx);
+ 		list_for_each_entry(sibling, &group_leader->sibling_list,
+@@ -6765,6 +6942,11 @@ SYSCALL_DEFINE5(perf_event_open,
+ 	perf_install_in_context(ctx, event, event->cpu);
+ 	++ctx->generation;
+ 	perf_unpin_context(ctx);
++
++	if (move_group) {
++		mutex_unlock(&gctx->mutex);
++		put_ctx(gctx);
++	}
+ 	mutex_unlock(&ctx->mutex);
+ 
+ 	put_online_cpus();
+@@ -6867,18 +7049,20 @@ void perf_pmu_migrate_context(struct pmu
+ 	src_ctx = &per_cpu_ptr(pmu->pmu_cpu_context, src_cpu)->ctx;
+ 	dst_ctx = &per_cpu_ptr(pmu->pmu_cpu_context, dst_cpu)->ctx;
+ 
+-	mutex_lock(&src_ctx->mutex);
++	/*
++	 * See perf_event_ctx_lock() for comments on the details
++	 * of swizzling perf_event::ctx.
++	 */
++	mutex_lock_double(&src_ctx->mutex, &dst_ctx->mutex);
+ 	list_for_each_entry_safe(event, tmp, &src_ctx->event_list,
+ 				 event_entry) {
+ 		perf_remove_from_context(event);
+ 		put_ctx(src_ctx);
+ 		list_add(&event->event_entry, &events);
+ 	}
+-	mutex_unlock(&src_ctx->mutex);
+ 
+ 	synchronize_rcu();
+ 
+-	mutex_lock(&dst_ctx->mutex);
+ 	list_for_each_entry_safe(event, tmp, &events, event_entry) {
+ 		list_del(&event->event_entry);
+ 		if (event->state >= PERF_EVENT_STATE_OFF)
+@@ -6887,6 +7071,7 @@ void perf_pmu_migrate_context(struct pmu
+ 		get_ctx(dst_ctx);
+ 	}
+ 	mutex_unlock(&dst_ctx->mutex);
++	mutex_unlock(&src_ctx->mutex);
+ }
+ EXPORT_SYMBOL_GPL(perf_pmu_migrate_context);
+ 
+diff -duprN mm/kernel/exec_domain.c n/kernel/exec_domain.c
+--- mm/kernel/exec_domain.c	2016-09-20 17:40:01.000000000 +0530
++++ n/kernel/exec_domain.c	2017-03-31 10:42:41.000000000 +0530
+@@ -68,7 +68,14 @@ lookup_exec_domain(unsigned int personal
+ 				goto out;
+ 	}
+ 
+-#ifdef CONFIG_MODULES
++/*
++ * Disable the request_module here to avoid trying to
++ * load the personality-8 module, which  doesn't exist,
++ * and results in selinux audit noise.
++ * Disabling this here avoids folks adding module_request
++ * to their sepolicy, which is maybe too generous
++ */
++#if 0
+ 	read_unlock(&exec_domains_lock);
+ 	request_module("personality-%d", pers);
+ 	read_lock(&exec_domains_lock);
+diff -duprN mm/kernel/irq/manage.c n/kernel/irq/manage.c
+--- mm/kernel/irq/manage.c	2016-09-20 17:40:01.000000000 +0530
++++ n/kernel/irq/manage.c	2017-03-31 10:42:41.000000000 +0530
+@@ -1126,6 +1126,9 @@ __setup_irq(unsigned int irq, struct irq
+ 			irqd_set(&desc->irq_data, IRQD_NO_BALANCING);
+ 		}
+ 
++		if (new->flags & IRQF_GIC_MULTI_TARGET)
++			irqd_set(&desc->irq_data, IRQD_GIC_MULTI_TARGET);
++
+ 		/* Set default affinity mask once everything is setup */
+ 		setup_affinity(irq, desc, mask);
+ 
+diff -duprN mm/kernel/module.c n/kernel/module.c
+--- mm/kernel/module.c	2016-09-20 17:39:57.000000000 +0530
++++ n/kernel/module.c	2017-03-31 10:42:41.000000000 +0530
+@@ -152,7 +152,6 @@ typedef enum {
+ 
+ #define HASH_SIZE 20
+ #define TIMA_SIGN_LEN 256	/* the rsa signature length of lkm_sec_info */
+-#define BOOTMODE_RECOVERY 2	/* bootmode in ATAG_CMDLINE for recovery mode */
+ 
+ uint8_t *tci = NULL;
+ uint8_t *drv_tci = NULL;
+@@ -161,15 +160,6 @@ uint8_t lkm_sec_info_loaded = 0;
+ struct mc_session_handle mchandle;
+ struct mc_session_handle drv_mchandle;
+ 
+-unsigned int lkmauth_bootmode;
+-static int __init lkmauth_bootmode_setup(char *str)
+-{
+-	get_option(&str, &lkmauth_bootmode);
+-	return 1;
+-}
+-
+-__setup("bootmode=", lkmauth_bootmode_setup);
+-
+ #endif /* End TIMA_ON_MC20 */
+ 
+ /*
+@@ -184,7 +174,6 @@ typedef struct lkmauth_hash_s {
+ 	uint32_t cmd_id;
+ 	uint32_t hash_buf_start;	/* starting address of buf for ko hashes */
+ 	uint32_t hash_buf_len;	/* length of hash buf, should be multiples of 20 bytes */
+-	uint8_t ko_num;		/* total number ko */
+ } __attribute__ ((packed)) lkmauth_hash_t;
+ 
+ typedef struct lkmauth_req_s {
+@@ -2842,7 +2831,6 @@ static int lkmauth(Elf_Ehdr * hdr, int l
+ 		 */
+ 		khashreq->hash_buf_start = (uint32_t) map_info.secure_virt_addr;
+ 		khashreq->hash_buf_len = buf_len;
+-		khashreq->ko_num = (buf_len - TIMA_SIGN_LEN) / HASH_SIZE;	/* calculate the the ko number */
+ 
+ 		/* prepare the response buffer */
+ 		krsp = (struct lkmauth_rsp_s *)tci;
+@@ -3110,10 +3098,9 @@ static int elf_header_check(struct load_
+ 	    || (info->hdr->e_shnum * sizeof(Elf_Shdr) >
+ 		info->len - info->hdr->e_shoff))
+ 		return -ENOEXEC;
+-		
++
+ #ifdef TIMA_LKM_AUTH_ENABLED
+-	if (lkmauth_bootmode != BOOTMODE_RECOVERY &&
+-	    lkmauth(info->hdr, info->len) != RET_LKMAUTH_SUCCESS) {
++	if (lkmauth(info->hdr, info->len) != RET_LKMAUTH_SUCCESS) {
+ 		pr_err
+ 		    ("TIMA: lkmauth--unable to load kernel module; module len is %lu.\n",
+ 		     info->len);
+diff -duprN mm/kernel/pid.c n/kernel/pid.c
+--- mm/kernel/pid.c	2016-09-20 17:40:01.000000000 +0530
++++ n/kernel/pid.c	2017-03-31 10:42:41.000000000 +0530
+@@ -518,8 +518,11 @@ pid_t __task_pid_nr_ns(struct task_struc
+ 	if (!ns)
+ 		ns = task_active_pid_ns(current);
+ 	if (likely(pid_alive(task))) {
+-		if (type != PIDTYPE_PID)
+-			task = task->group_leader;
++		if (type != PIDTYPE_PID) {
++			if (type == __PIDTYPE_TGID)
++				type = PIDTYPE_PID;
++ 			task = task->group_leader;
++		}
+ 		nr = pid_nr_ns(task->pids[type].pid, ns);
+ 	}
+ 	rcu_read_unlock();
+@@ -528,12 +531,6 @@ pid_t __task_pid_nr_ns(struct task_struc
+ }
+ EXPORT_SYMBOL(__task_pid_nr_ns);
+ 
+-pid_t task_tgid_nr_ns(struct task_struct *tsk, struct pid_namespace *ns)
+-{
+-	return pid_nr_ns(task_tgid(tsk), ns);
+-}
+-EXPORT_SYMBOL(task_tgid_nr_ns);
+-
+ struct pid_namespace *task_active_pid_ns(struct task_struct *tsk)
+ {
+ 	return ns_of_pid(task_pid(tsk));
+diff -duprN mm/kernel/power/qos.c n/kernel/power/qos.c
+--- mm/kernel/power/qos.c	2016-09-20 17:40:02.000000000 +0530
++++ n/kernel/power/qos.c	2017-03-31 10:42:41.000000000 +0530
+@@ -820,7 +820,7 @@ static void pm_qos_debug_show_one(struct
+ 	plist_for_each(p, &qos->constraints->list) {
+ 		struct pm_qos_request *req =
+ 			container_of(p, struct pm_qos_request, node);
+-		seq_printf(s, "      %pk: %d (%ps)\n",
++		seq_printf(s, "      %pK: %d (%ps)\n",
+ 				req, p->prio, (void *)req->caller);
+ 	}
+ 
+diff -duprN mm/kernel/power/suspend.c n/kernel/power/suspend.c
+--- mm/kernel/power/suspend.c	2016-09-20 17:40:02.000000000 +0530
++++ n/kernel/power/suspend.c	2017-03-31 10:42:41.000000000 +0530
+@@ -335,7 +335,11 @@ static int enter_state(suspend_state_t s
+ 		freeze_begin();
+ 
+ 	printk(KERN_INFO "PM: Syncing filesystems ... ");
+-	sys_sync();
++	if (intr_sync(NULL)) {
++		printk("canceled.\n");
++		error = -EBUSY;
++		goto Unlock;
++	}
+ 	printk("done.\n");
+ 
+ 	pr_debug("PM: Preparing system for %s sleep\n", pm_states[state]);
+diff -duprN mm/kernel/ptrace.c n/kernel/ptrace.c
+--- mm/kernel/ptrace.c	2016-09-20 17:40:02.000000000 +0530
++++ n/kernel/ptrace.c	2017-03-31 10:42:41.000000000 +0530
+@@ -257,7 +257,7 @@ static int __ptrace_may_access(struct ta
+ 	 */
+ 	int dumpable = 0;
+ 	/* Don't let security modules deny introspection */
+-	if (task == current)
++	if (same_thread_group(task, current))
+ 		return 0;
+ 	rcu_read_lock();
+ 	tcred = __task_cred(task);
+diff -duprN mm/kernel/resource.c n/kernel/resource.c
+--- mm/kernel/resource.c	2016-09-20 17:40:02.000000000 +0530
++++ n/kernel/resource.c	2017-03-31 10:42:42.000000000 +0530
+@@ -153,7 +153,7 @@ static const struct file_operations proc
+ static int __init ioresources_init(void)
+ {
+ 	proc_create("ioports", 0, NULL, &proc_ioports_operations);
+-	proc_create("iomem", 0, NULL, &proc_iomem_operations);
++	proc_create("iomem", S_IRUSR, NULL, &proc_iomem_operations);
+ 	return 0;
+ }
+ __initcall(ioresources_init);
+diff -duprN mm/kernel/sys.c n/kernel/sys.c
+--- mm/kernel/sys.c	2016-09-20 17:40:03.000000000 +0530
++++ n/kernel/sys.c	2017-03-31 10:42:42.000000000 +0530
+@@ -126,6 +126,8 @@ int C_A_D = 1;
+ struct pid *cad_pid;
+ EXPORT_SYMBOL(cad_pid);
+ 
++int ignore_fs_panic = 0; // To prevent kernel panic by EIO during shutdown
++
+ /*
+  * If set, this is used for preparing the system to power off.
+  */
+@@ -380,6 +382,7 @@ void kernel_restart_prepare(char *cmd)
+ 	blocking_notifier_call_chain(&reboot_notifier_list, SYS_RESTART, cmd);
+ 	system_state = SYSTEM_RESTART;
+ 	usermodehelper_disable();
++	ignore_fs_panic = 1;
+ 	device_shutdown();
+ }
+ 
+@@ -465,6 +468,7 @@ static void kernel_shutdown_prepare(enum
+ 		(state == SYSTEM_HALT)?SYS_HALT:SYS_POWER_OFF, NULL);
+ 	system_state = state;
+ 	usermodehelper_disable();
++	ignore_fs_panic = 1;
+ 	device_shutdown();
+ }
+ /**
+@@ -2469,9 +2473,6 @@ SYSCALL_DEFINE5(prctl, int, option, unsi
+ 			else
+ 				return -EINVAL;
+ 			break;
+-		case PR_SET_VMA:
+-			error = prctl_set_vma(arg2, arg3, arg4, arg5);
+-			break;
+ 		default:
+ 			return -EINVAL;
+ 		}
+@@ -2508,6 +2509,9 @@ SYSCALL_DEFINE5(prctl, int, option, unsi
+ 		if (arg2 || arg3 || arg4 || arg5)
+ 			return -EINVAL;
+ 		return task_no_new_privs(current) ? 1 : 0;
++	case PR_SET_VMA:
++		error = prctl_set_vma(arg2, arg3, arg4, arg5);
++		break;
+ 	default:
+ 		error = -EINVAL;
+ 		break;
+diff -duprN mm/kernel/sysctl.c n/kernel/sysctl.c
+--- mm/kernel/sysctl.c	2016-09-20 17:40:00.000000000 +0530
++++ n/kernel/sysctl.c	2017-03-31 10:42:42.000000000 +0530
+@@ -1465,6 +1465,28 @@ static struct ctl_table vm_table[] = {
+ 		.mode		= 0644,
+ 		.proc_handler	= proc_doulongvec_minmax,
+ 	},
++#ifdef CONFIG_HAVE_ARCH_MMAP_RND_BITS
++	{
++		.procname	= "mmap_rnd_bits",
++		.data		= &mmap_rnd_bits,
++		.maxlen		= sizeof(mmap_rnd_bits),
++		.mode		= 0600,
++		.proc_handler	= proc_dointvec_minmax,
++		.extra1		= (void *)&mmap_rnd_bits_min,
++		.extra2		= (void *)&mmap_rnd_bits_max,
++	},
++#endif
++#ifdef CONFIG_HAVE_ARCH_MMAP_RND_COMPAT_BITS
++	{
++		.procname	= "mmap_rnd_compat_bits",
++		.data		= &mmap_rnd_compat_bits,
++		.maxlen		= sizeof(mmap_rnd_compat_bits),
++		.mode		= 0600,
++		.proc_handler	= proc_dointvec_minmax,
++		.extra1		= (void *)&mmap_rnd_compat_bits_min,
++		.extra2		= (void *)&mmap_rnd_compat_bits_max,
++	},
++#endif
+ 	{ }
+ };
+ 
+@@ -1638,6 +1660,20 @@ static struct ctl_table fs_table[] = {
+ 		.proc_handler	= &pipe_proc_fn,
+ 		.extra1		= &pipe_min_size,
+ 	},
++	{
++		.procname	= "pipe-user-pages-hard",
++		.data		= &pipe_user_pages_hard,
++		.maxlen		= sizeof(pipe_user_pages_hard),
++		.mode		= 0644,
++		.proc_handler	= proc_doulongvec_minmax,
++	},
++	{
++		.procname	= "pipe-user-pages-soft",
++		.data		= &pipe_user_pages_soft,
++		.maxlen		= sizeof(pipe_user_pages_soft),
++		.mode		= 0644,
++		.proc_handler	= proc_doulongvec_minmax,
++	},
+ 	{ }
+ };
+ 
+diff -duprN mm/kernel/trace/ring_buffer.c n/kernel/trace/ring_buffer.c
+--- mm/kernel/trace/ring_buffer.c	2016-09-20 17:40:03.000000000 +0530
++++ n/kernel/trace/ring_buffer.c	2017-03-31 10:42:42.000000000 +0530
+@@ -1630,14 +1630,13 @@ int ring_buffer_resize(struct ring_buffe
+ 	    !cpumask_test_cpu(cpu_id, buffer->cpumask))
+ 		return size;
+ 
+-	size = DIV_ROUND_UP(size, BUF_PAGE_SIZE);
+-	size *= BUF_PAGE_SIZE;
++	nr_pages = DIV_ROUND_UP(size, BUF_PAGE_SIZE);
+ 
+ 	/* we need a minimum of two pages */
+-	if (size < BUF_PAGE_SIZE * 2)
+-		size = BUF_PAGE_SIZE * 2;
++	if (nr_pages < 2)
++		nr_pages = 2;
+ 
+-	nr_pages = DIV_ROUND_UP(size, BUF_PAGE_SIZE);
++	size = nr_pages * BUF_PAGE_SIZE;
+ 
+ 	/*
+ 	 * Don't succeed if resizing is disabled, as a reader might be

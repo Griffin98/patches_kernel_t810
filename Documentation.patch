@@ -1,0 +1,186 @@
+diff -duprN mm/Documentation/ramoops.txt n/Documentation/ramoops.txt
+--- mm/Documentation/ramoops.txt	2016-09-20 17:29:20.000000000 +0530
++++ n/Documentation/ramoops.txt	2017-03-31 10:41:25.000000000 +0530
+@@ -14,11 +14,19 @@ survive after a restart.
+ 
+ 1. Ramoops concepts
+ 
+-Ramoops uses a predefined memory area to store the dump. The start and size of
+-the memory area are set using two variables:
++Ramoops uses a predefined memory area to store the dump. The start and size
++and type of the memory area are set using three variables:
+   * "mem_address" for the start
+   * "mem_size" for the size. The memory size will be rounded down to a
+   power of two.
++  * "mem_type" to specifiy if the memory type (default is pgprot_writecombine).
++
++Typically the default value of mem_type=0 should be used as that sets the pstore
++mapping to pgprot_writecombine. Setting mem_type=1 attempts to use
++pgprot_noncached, which only works on some platforms. This is because pstore
++depends on atomic operations. At least on ARM, pgprot_noncached causes the
++memory to be mapped strongly ordered, and atomic operations on strongly ordered
++memory are implementation defined, and won't work on many ARMs such as omaps.
+ 
+ The memory area is divided into "record_size" chunks (also rounded down to
+ power of two) and each oops/panic writes a "record_size" chunk of
+@@ -55,6 +63,7 @@ Setting the ramoops parameters can be do
+ static struct ramoops_platform_data ramoops_data = {
+         .mem_size               = <...>,
+         .mem_address            = <...>,
++        .mem_type               = <...>,
+         .record_size            = <...>,
+         .dump_oops              = <...>,
+         .ecc                    = <...>,
+diff -duprN mm/Documentation/sysctl/fs.txt n/Documentation/sysctl/fs.txt
+--- mm/Documentation/sysctl/fs.txt	2016-09-20 17:29:23.000000000 +0530
++++ n/Documentation/sysctl/fs.txt	2017-03-31 10:41:25.000000000 +0530
+@@ -32,6 +32,8 @@ Currently, these files are in /proc/sys/
+ - nr_open
+ - overflowuid
+ - overflowgid
++- pipe-user-pages-hard
++- pipe-user-pages-soft
+ - protected_hardlinks
+ - protected_symlinks
+ - suid_dumpable
+@@ -159,6 +161,27 @@ The default is 65534.
+ 
+ ==============================================================
+ 
++pipe-user-pages-hard:
++
++Maximum total number of pages a non-privileged user may allocate for pipes.
++Once this limit is reached, no new pipes may be allocated until usage goes
++below the limit again. When set to 0, no limit is applied, which is the default
++setting.
++
++==============================================================
++
++pipe-user-pages-soft:
++
++Maximum total number of pages a non-privileged user may allocate for pipes
++before the pipe size gets limited to a single page. Once this limit is reached,
++new pipes will be limited to a single page in size for this user in order to
++limit total memory usage, and trying to increase them using fcntl() will be
++denied until usage goes below the limit again. The default value allows to
++allocate up to 1024 pipes at their default size. When set to 0, no limit is
++applied.
++
++==============================================================
++
+ protected_hardlinks:
+ 
+ A long-standing class of security issues is the hardlink-based
+diff -duprN mm/Documentation/sysctl/kernel.txt n/Documentation/sysctl/kernel.txt
+--- mm/Documentation/sysctl/kernel.txt	2016-09-20 17:29:23.000000000 +0530
++++ n/Documentation/sysctl/kernel.txt	2017-03-31 10:41:25.000000000 +0530
+@@ -49,8 +49,9 @@ show up in /proc/sys/kernel:
+ - overflowuid
+ - panic
+ - panic_on_oops
+-- panic_on_unrecovered_nmi
+ - panic_on_stackoverflow
++- panic_on_unrecovered_nmi
++- perf_event_paranoid
+ - pid_max
+ - powersave-nap               [ PPC only ]
+ - printk
+@@ -391,19 +392,6 @@ the recommended setting is 60.
+ 
+ ==============================================================
+ 
+-panic_on_unrecovered_nmi:
+-
+-The default Linux behaviour on an NMI of either memory or unknown is
+-to continue operation. For many environments such as scientific
+-computing it is preferable that the box is taken out and the error
+-dealt with than an uncorrected parity/ECC error get propagated.
+-
+-A small number of systems do generate NMI's for bizarre random reasons
+-such as power management so the default is off. That sysctl works like
+-the existing panic controls already in that directory.
+-
+-==============================================================
+-
+ panic_on_oops:
+ 
+ Controls the kernel's behaviour when an oops or BUG is encountered.
+@@ -427,6 +415,32 @@ This file shows up if CONFIG_DEBUG_STACK
+ 
+ ==============================================================
+ 
++panic_on_unrecovered_nmi:
++
++The default Linux behaviour on an NMI of either memory or unknown is
++to continue operation. For many environments such as scientific
++computing it is preferable that the box is taken out and the error
++dealt with than an uncorrected parity/ECC error get propagated.
++
++A small number of systems do generate NMI's for bizarre random reasons
++such as power management so the default is off. That sysctl works like
++the existing panic controls already in that directory.
++
++==============================================================
++
++perf_event_paranoid:
++
++Controls use of the performance events system by unprivileged
++users (without CAP_SYS_ADMIN).  The default value is 3 if
++CONFIG_SECURITY_PERF_EVENTS_RESTRICT is set, or 1 otherwise.
++
++ -1: Allow use of (almost) all events by all users
++>=0: Disallow raw tracepoint access by users without CAP_IOC_LOCK
++>=1: Disallow CPU event access by users without CAP_SYS_ADMIN
++>=2: Disallow kernel profiling by users without CAP_SYS_ADMIN
++>=3: Disallow all event access by users without CAP_SYS_ADMIN
++
++==============================================================
+ 
+ pid_max:
+ 
+diff -duprN mm/Documentation/sysctl/vm.txt n/Documentation/sysctl/vm.txt
+--- mm/Documentation/sysctl/vm.txt	2016-09-20 17:29:23.000000000 +0530
++++ n/Documentation/sysctl/vm.txt	2017-03-31 10:41:25.000000000 +0530
+@@ -42,6 +42,8 @@ Currently, these files are in /proc/sys/
+ - min_slab_ratio
+ - min_unmapped_ratio
+ - mmap_min_addr
++- mmap_rnd_bits
++- mmap_rnd_compat_bits
+ - nr_hugepages
+ - nr_overcommit_hugepages
+ - nr_trim_pages         (only if CONFIG_MMU=n)
+@@ -455,6 +457,33 @@ against future potential kernel bugs.
+ 
+ ==============================================================
+ 
++mmap_rnd_bits:
++
++This value can be used to select the number of bits to use to
++determine the random offset to the base address of vma regions
++resulting from mmap allocations on architectures which support
++tuning address space randomization.  This value will be bounded
++by the architecture's minimum and maximum supported values.
++
++This value can be changed after boot using the
++/proc/sys/vm/mmap_rnd_bits tunable
++
++==============================================================
++
++mmap_rnd_compat_bits:
++
++This value can be used to select the number of bits to use to
++determine the random offset to the base address of vma regions
++resulting from mmap allocations for applications run in
++compatibility mode on architectures which support tuning address
++space randomization.  This value will be bounded by the
++architecture's minimum and maximum supported values.
++
++This value can be changed after boot using the
++/proc/sys/vm/mmap_rnd_compat_bits tunable
++
++==============================================================
++
+ nr_hugepages
+ 
+ Change the minimum size of the hugepage pool.

@@ -1,0 +1,3185 @@
+diff -duprN mm/net/appletalk/ddp.c n/net/appletalk/ddp.c
+--- mm/net/appletalk/ddp.c	2016-09-20 17:40:08.000000000 +0530
++++ n/net/appletalk/ddp.c	2017-03-31 10:42:43.000000000 +0530
+@@ -1735,7 +1735,6 @@ static int atalk_recvmsg(struct kiocb *i
+ 			 size_t size, int flags)
+ {
+ 	struct sock *sk = sock->sk;
+-	struct sockaddr_at *sat = (struct sockaddr_at *)msg->msg_name;
+ 	struct ddpehdr *ddp;
+ 	int copied = 0;
+ 	int offset = 0;
+@@ -1764,15 +1763,14 @@ static int atalk_recvmsg(struct kiocb *i
+ 	}
+ 	err = skb_copy_datagram_iovec(skb, offset, msg->msg_iov, copied);
+ 
+-	if (!err) {
+-		if (sat) {
+-			sat->sat_family      = AF_APPLETALK;
+-			sat->sat_port        = ddp->deh_sport;
+-			sat->sat_addr.s_node = ddp->deh_snode;
+-			sat->sat_addr.s_net  = ddp->deh_snet;
+-		}
+-		msg->msg_namelen = sizeof(*sat);
+-	}
++	if (!err && msg->msg_name) {
++		struct sockaddr_at *sat = msg->msg_name;
++		sat->sat_family      = AF_APPLETALK;
++		sat->sat_port        = ddp->deh_sport;
++		sat->sat_addr.s_node = ddp->deh_snode;
++		sat->sat_addr.s_net  = ddp->deh_snet;
++		msg->msg_namelen     = sizeof(*sat);
++ 	}
+ 
+ 	skb_free_datagram(sk, skb);	/* Free the datagram. */
+ 
+diff -duprN mm/net/atm/common.c n/net/atm/common.c
+--- mm/net/atm/common.c	2016-09-20 17:40:08.000000000 +0530
++++ n/net/atm/common.c	2017-03-31 10:42:43.000000000 +0530
+@@ -531,8 +531,6 @@ int vcc_recvmsg(struct kiocb *iocb, stru
+ 	struct sk_buff *skb;
+ 	int copied, error = -EINVAL;
+ 
+-	msg->msg_namelen = 0;
+-
+ 	if (sock->state != SS_CONNECTED)
+ 		return -ENOTCONN;
+ 
+diff -duprN mm/net/ax25/af_ax25.c n/net/ax25/af_ax25.c
+--- mm/net/ax25/af_ax25.c	2016-09-20 17:40:08.000000000 +0530
++++ n/net/ax25/af_ax25.c	2017-03-31 10:42:43.000000000 +0530
+@@ -1639,11 +1639,11 @@ static int ax25_recvmsg(struct kiocb *io
+ 
+ 	skb_copy_datagram_iovec(skb, 0, msg->msg_iov, copied);
+ 
+-	if (msg->msg_namelen != 0) {
+-		struct sockaddr_ax25 *sax = (struct sockaddr_ax25 *)msg->msg_name;
++	if (msg->msg_name) {
+ 		ax25_digi digi;
+ 		ax25_address src;
+ 		const unsigned char *mac = skb_mac_header(skb);
++		struct sockaddr_ax25 *sax = msg->msg_name;
+ 
+ 		memset(sax, 0, sizeof(struct full_sockaddr_ax25));
+ 		ax25_addr_parse(mac + 1, skb->data - mac - 1, &src, NULL,
+diff -duprN mm/net/bluetooth/af_bluetooth.c n/net/bluetooth/af_bluetooth.c
+--- mm/net/bluetooth/af_bluetooth.c	2016-09-20 17:40:08.000000000 +0530
++++ n/net/bluetooth/af_bluetooth.c	2017-03-31 10:42:43.000000000 +0530
+@@ -321,8 +321,6 @@ int bt_sock_stream_recvmsg(struct kiocb
+ 	if (flags & MSG_OOB)
+ 		return -EOPNOTSUPP;
+ 
+-	msg->msg_namelen = 0;
+-
+ 	BT_DBG("sk %p size %zu", sk, size);
+ 
+ 	lock_sock(sk);
+diff -duprN mm/net/bluetooth/hci_sock.c n/net/bluetooth/hci_sock.c
+--- mm/net/bluetooth/hci_sock.c	2016-09-20 17:40:08.000000000 +0530
++++ n/net/bluetooth/hci_sock.c	2017-03-31 10:42:43.000000000 +0530
+@@ -752,8 +752,6 @@ static int hci_sock_recvmsg(struct kiocb
+ 	if (!skb)
+ 		return err;
+ 
+-	msg->msg_namelen = 0;
+-
+ 	copied = skb->len;
+ 	if (len < copied) {
+ 		msg->msg_flags |= MSG_TRUNC;
+diff -duprN mm/net/bluetooth/rfcomm/sock.c n/net/bluetooth/rfcomm/sock.c
+--- mm/net/bluetooth/rfcomm/sock.c	2016-09-20 17:40:08.000000000 +0530
++++ n/net/bluetooth/rfcomm/sock.c	2017-03-31 10:42:43.000000000 +0530
+@@ -608,7 +608,6 @@ static int rfcomm_sock_recvmsg(struct ki
+ 
+ 	if (test_and_clear_bit(RFCOMM_DEFER_SETUP, &d->flags)) {
+ 		rfcomm_dlc_accept(d);
+-		msg->msg_namelen = 0;
+ 		return 0;
+ 	}
+ 
+diff -duprN mm/net/bluetooth/sco.c n/net/bluetooth/sco.c
+--- mm/net/bluetooth/sco.c	2016-09-20 17:40:08.000000000 +0530
++++ n/net/bluetooth/sco.c	2017-03-31 10:42:43.000000000 +0530
+@@ -717,7 +717,6 @@ static int sco_sock_recvmsg(struct kiocb
+ 	    test_bit(BT_SK_DEFER_SETUP, &bt_sk(sk)->flags)) {
+ 		sco_conn_defer_accept(pi->conn->hcon, 0);
+ 		sk->sk_state = BT_CONFIG;
+-		msg->msg_namelen = 0;
+ 
+ 		release_sock(sk);
+ 		return 0;
+diff -duprN mm/net/caif/caif_socket.c n/net/caif/caif_socket.c
+--- mm/net/caif/caif_socket.c	2016-09-20 17:40:09.000000000 +0530
++++ n/net/caif/caif_socket.c	2017-03-31 10:42:43.000000000 +0530
+@@ -286,8 +286,6 @@ static int caif_seqpkt_recvmsg(struct ki
+ 	if (m->msg_flags&MSG_OOB)
+ 		goto read_error;
+ 
+-	m->msg_namelen = 0;
+-
+ 	skb = skb_recv_datagram(sk, flags, 0 , &ret);
+ 	if (!skb)
+ 		goto read_error;
+@@ -361,8 +359,6 @@ static int caif_stream_recvmsg(struct ki
+ 	if (flags&MSG_OOB)
+ 		goto out;
+ 
+-	msg->msg_namelen = 0;
+-
+ 	/*
+ 	 * Lock the socket to prevent queue disordering
+ 	 * while sleeps in memcpy_tomsg
+diff -duprN mm/net/compat.c n/net/compat.c
+--- mm/net/compat.c	2016-09-20 17:40:09.000000000 +0530
++++ n/net/compat.c	2017-03-31 10:42:43.000000000 +0530
+@@ -91,7 +91,8 @@ int verify_compat_iovec(struct msghdr *k
+ 			if (err < 0)
+ 				return err;
+ 		}
+-		kern_msg->msg_name = kern_address;
++		if (kern_msg->msg_name)
++			kern_msg->msg_name = kern_address;
+ 	} else
+ 		kern_msg->msg_name = NULL;
+ 
+diff -duprN mm/net/core/datagram.c n/net/core/datagram.c
+--- mm/net/core/datagram.c	2016-09-20 17:40:09.000000000 +0530
++++ n/net/core/datagram.c	2017-03-31 10:42:43.000000000 +0530
+@@ -682,6 +682,7 @@ EXPORT_SYMBOL(__skb_checksum_complete);
+  *	@skb: skbuff
+  *	@hlen: hardware length
+  *	@iov: io vector
++ *	@len: amount of data to copy from skb to iov
+  *
+  *	Caller _must_ check that skb will fit to this iovec.
+  *
+@@ -691,11 +692,14 @@ EXPORT_SYMBOL(__skb_checksum_complete);
+  *			   can be modified!
+  */
+ int skb_copy_and_csum_datagram_iovec(struct sk_buff *skb,
+-				     int hlen, struct iovec *iov)
++				     int hlen, struct iovec *iov, int len)
+ {
+ 	__wsum csum;
+ 	int chunk = skb->len - hlen;
+ 
++	if (chunk > len)
++		chunk = len;
++
+ 	if (!chunk)
+ 		return 0;
+ 
+diff -duprN mm/net/core/ethtool.c n/net/core/ethtool.c
+--- mm/net/core/ethtool.c	2016-09-20 17:40:09.000000000 +0530
++++ n/net/core/ethtool.c	2017-03-31 10:42:43.000000000 +0530
+@@ -711,11 +711,14 @@ static int ethtool_reset(struct net_devi
+ 
+ static int ethtool_get_wol(struct net_device *dev, char __user *useraddr)
+ {
+-	struct ethtool_wolinfo wol = { .cmd = ETHTOOL_GWOL };
++	struct ethtool_wolinfo wol;
+ 
+ 	if (!dev->ethtool_ops->get_wol)
+ 		return -EOPNOTSUPP;
+ 
++	memset(&wol, 0, sizeof(struct ethtool_wolinfo));
++	wol.cmd = ETHTOOL_GWOL;
++
+ 	dev->ethtool_ops->get_wol(dev, &wol);
+ 
+ 	if (copy_to_user(useraddr, &wol, sizeof(wol)))
+diff -duprN mm/net/core/iovec.c n/net/core/iovec.c
+--- mm/net/core/iovec.c	2016-09-20 17:40:09.000000000 +0530
++++ n/net/core/iovec.c	2017-03-31 10:42:43.000000000 +0530
+@@ -48,7 +48,8 @@ int verify_iovec(struct msghdr *m, struc
+ 			if (err < 0)
+ 				return err;
+ 		}
+-		m->msg_name = address;
++		if (m->msg_name)
++			m->msg_name = address;
+ 	} else {
+ 		m->msg_name = NULL;
+ 	}
+diff -duprN mm/net/core/neighbour.c n/net/core/neighbour.c
+--- mm/net/core/neighbour.c	2016-09-20 17:40:08.000000000 +0530
++++ n/net/core/neighbour.c	2017-03-31 10:42:43.000000000 +0530
+@@ -703,7 +703,7 @@ void neigh_destroy(struct neighbour *nei
+ 	NEIGH_CACHE_STAT_INC(neigh->tbl, destroys);
+ 
+ 	if (!neigh->dead) {
+-		pr_warn("Destroying alive neighbour %p\n", neigh);
++		pr_warn("Destroying alive neighbour %pK\n", neigh);
+ 		dump_stack();
+ 		return;
+ 	}
+@@ -1317,7 +1317,7 @@ int neigh_resolve_output(struct neighbou
+ out:
+ 	return rc;
+ discard:
+-	neigh_dbg(1, "%s: dst=%p neigh=%p\n", __func__, dst, neigh);
++	neigh_dbg(1, "%s: dst=%pK neigh=%pK\n", __func__, dst, neigh);
+ out_kfree_skb:
+ 	rc = -EINVAL;
+ 	kfree_skb(skb);
+diff -duprN mm/net/core/scm.c n/net/core/scm.c
+--- mm/net/core/scm.c	2016-09-20 17:40:09.000000000 +0530
++++ n/net/core/scm.c	2017-03-31 10:42:43.000000000 +0530
+@@ -87,6 +87,7 @@ static int scm_fp_copy(struct cmsghdr *c
+ 		*fplp = fpl;
+ 		fpl->count = 0;
+ 		fpl->max = SCM_MAX_FD;
++		fpl->user = NULL;
+ 	}
+ 	fpp = &fpl->fp[fpl->count];
+ 
+@@ -107,6 +108,10 @@ static int scm_fp_copy(struct cmsghdr *c
+ 		*fpp++ = file;
+ 		fpl->count++;
+ 	}
++
++	if (!fpl->user)
++		fpl->user = get_uid(current_user());
++
+ 	return num;
+ }
+ 
+@@ -119,6 +124,7 @@ void __scm_destroy(struct scm_cookie *sc
+ 		scm->fp = NULL;
+ 		for (i=fpl->count-1; i>=0; i--)
+ 			fput(fpl->fp[i]);
++		free_uid(fpl->user);
+ 		kfree(fpl);
+ 	}
+ }
+@@ -335,6 +341,7 @@ struct scm_fp_list *scm_fp_dup(struct sc
+ 		for (i = 0; i < fpl->count; i++)
+ 			get_file(fpl->fp[i]);
+ 		new_fpl->max = new_fpl->count;
++		new_fpl->user = get_uid(fpl->user);
+ 	}
+ 	return new_fpl;
+ }
+diff -duprN mm/net/core/sock.c n/net/core/sock.c
+--- mm/net/core/sock.c	2016-09-20 17:40:09.000000000 +0530
++++ n/net/core/sock.c	2017-03-31 10:42:43.000000000 +0530
+@@ -687,7 +687,7 @@ int sock_setsockopt(struct socket *sock,
+ 		val = min_t(u32, val, sysctl_wmem_max);
+ set_sndbuf:
+ 		sk->sk_userlocks |= SOCK_SNDBUF_LOCK;
+-		sk->sk_sndbuf = max_t(u32, val * 2, SOCK_MIN_SNDBUF);
++		sk->sk_sndbuf = max_t(int, val * 2, SOCK_MIN_SNDBUF);
+ 		/* Wake up sending tasks if we upped the value. */
+ 		sk->sk_write_space(sk);
+ 		break;
+@@ -723,7 +723,7 @@ set_rcvbuf:
+ 		 * returning the value we actually used in getsockopt
+ 		 * is the most desirable behavior.
+ 		 */
+-		sk->sk_rcvbuf = max_t(u32, val * 2, SOCK_MIN_RCVBUF);
++		sk->sk_rcvbuf = max_t(int, val * 2, SOCK_MIN_RCVBUF);
+ 		break;
+ 
+ 	case SO_RCVBUFFORCE:
+diff -duprN mm/net/core/sock_diag.c n/net/core/sock_diag.c
+--- mm/net/core/sock_diag.c	2016-09-20 17:40:09.000000000 +0530
++++ n/net/core/sock_diag.c	2017-03-31 10:42:43.000000000 +0530
+@@ -135,7 +135,7 @@ void sock_diag_unregister(const struct s
+ }
+ EXPORT_SYMBOL_GPL(sock_diag_unregister);
+ 
+-static int __sock_diag_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
++static int __sock_diag_cmd(struct sk_buff *skb, struct nlmsghdr *nlh)
+ {
+ 	int err;
+ 	struct sock_diag_req *req = nlmsg_data(nlh);
+@@ -155,8 +155,12 @@ static int __sock_diag_rcv_msg(struct sk
+ 	hndl = sock_diag_handlers[req->sdiag_family];
+ 	if (hndl == NULL)
+ 		err = -ENOENT;
+-	else
++	else if (nlh->nlmsg_type == SOCK_DIAG_BY_FAMILY)
+ 		err = hndl->dump(skb, nlh);
++	else if (nlh->nlmsg_type == SOCK_DESTROY_BACKPORT && hndl->destroy)
++		err = hndl->destroy(skb, nlh);
++	else
++		err = -EOPNOTSUPP;
+ 	mutex_unlock(&sock_diag_table_mutex);
+ 
+ 	return err;
+@@ -182,7 +186,8 @@ static int sock_diag_rcv_msg(struct sk_b
+ 
+ 		return ret;
+ 	case SOCK_DIAG_BY_FAMILY:
+-		return __sock_diag_rcv_msg(skb, nlh);
++	case SOCK_DESTROY_BACKPORT:
++		return __sock_diag_cmd(skb, nlh);
+ 	default:
+ 		return -EINVAL;
+ 	}
+@@ -197,6 +202,18 @@ static void sock_diag_rcv(struct sk_buff
+ 	mutex_unlock(&sock_diag_mutex);
+ }
+ 
++int sock_diag_destroy(struct sock *sk, int err)
++{
++	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
++		return -EPERM;
++
++	if (!sk->sk_prot->diag_destroy)
++		return -EOPNOTSUPP;
++
++	return sk->sk_prot->diag_destroy(sk, err);
++}
++EXPORT_SYMBOL_GPL(sock_diag_destroy);
++
+ static int __net_init diag_net_init(struct net *net)
+ {
+ 	struct netlink_kernel_cfg cfg = {
+diff -duprN mm/net/dccp/input.c n/net/dccp/input.c
+--- mm/net/dccp/input.c	2016-09-20 17:40:09.000000000 +0530
++++ n/net/dccp/input.c	2017-03-31 10:42:43.000000000 +0530
+@@ -606,7 +606,8 @@ int dccp_rcv_state_process(struct sock *
+ 			if (inet_csk(sk)->icsk_af_ops->conn_request(sk,
+ 								    skb) < 0)
+ 				return 1;
+-			goto discard;
++			consume_skb(skb);
++			return 0;
+ 		}
+ 		if (dh->dccph_type == DCCP_PKT_RESET)
+ 			goto discard;
+diff -duprN mm/net/dccp/ipv6.c n/net/dccp/ipv6.c
+--- mm/net/dccp/ipv6.c	2016-09-20 17:40:10.000000000 +0530
++++ n/net/dccp/ipv6.c	2017-03-31 10:42:43.000000000 +0530
+@@ -234,7 +234,9 @@ static int dccp_v6_send_response(struct
+ 	security_req_classify_flow(req, flowi6_to_flowi(&fl6));
+ 
+ 
+-	final_p = fl6_update_dst(&fl6, np->opt, &final);
++	rcu_read_lock();
++	final_p = fl6_update_dst(&fl6, rcu_dereference(np->opt), &final);
++	rcu_read_unlock();
+ 
+ 	dst = ip6_dst_lookup_flow(sk, &fl6, final_p, false);
+ 	if (IS_ERR(dst)) {
+@@ -251,7 +253,10 @@ static int dccp_v6_send_response(struct
+ 							 &ireq6->loc_addr,
+ 							 &ireq6->rmt_addr);
+ 		fl6.daddr = ireq6->rmt_addr;
+-		err = ip6_xmit(sk, skb, &fl6, np->opt, np->tclass);
++		rcu_read_lock();
++		err = ip6_xmit(sk, skb, &fl6, rcu_dereference(np->opt),
++			       np->tclass);
++		rcu_read_unlock();
+ 		err = net_xmit_eval(err);
+ 	}
+ 
+@@ -447,6 +452,7 @@ static struct sock *dccp_v6_request_recv
+ {
+ 	struct inet6_request_sock *ireq6 = inet6_rsk(req);
+ 	struct ipv6_pinfo *newnp, *np = inet6_sk(sk);
++	struct ipv6_txoptions *opt;
+ 	struct inet_sock *newinet;
+ 	struct dccp6_sock *newdp6;
+ 	struct sock *newsk;
+@@ -570,13 +576,15 @@ static struct sock *dccp_v6_request_recv
+ 	 * Yes, keeping reference count would be much more clever, but we make
+ 	 * one more one thing there: reattach optmem to newsk.
+ 	 */
+-	if (np->opt != NULL)
+-		newnp->opt = ipv6_dup_options(newsk, np->opt);
+-
++	opt = rcu_dereference(np->opt);
++	if (opt) {
++		opt = ipv6_dup_options(newsk, opt);
++		RCU_INIT_POINTER(newnp->opt, opt);
++	}
+ 	inet_csk(newsk)->icsk_ext_hdr_len = 0;
+-	if (newnp->opt != NULL)
+-		inet_csk(newsk)->icsk_ext_hdr_len = (newnp->opt->opt_nflen +
+-						     newnp->opt->opt_flen);
++	if (opt)
++		inet_csk(newsk)->icsk_ext_hdr_len = opt->opt_nflen +
++						    opt->opt_flen;
+ 
+ 	dccp_sync_mss(newsk, dst_mtu(dst));
+ 
+@@ -828,6 +836,7 @@ static int dccp_v6_connect(struct sock *
+ 	struct ipv6_pinfo *np = inet6_sk(sk);
+ 	struct dccp_sock *dp = dccp_sk(sk);
+ 	struct in6_addr *saddr = NULL, *final_p, final;
++	struct ipv6_txoptions *opt;
+ 	struct flowi6 fl6;
+ 	struct dst_entry *dst;
+ 	int addr_type;
+@@ -930,7 +939,8 @@ static int dccp_v6_connect(struct sock *
+ 	fl6.fl6_sport = inet->inet_sport;
+ 	security_sk_classify_flow(sk, flowi6_to_flowi(&fl6));
+ 
+-	final_p = fl6_update_dst(&fl6, np->opt, &final);
++	opt = rcu_dereference_protected(np->opt, sock_owned_by_user(sk));
++	final_p = fl6_update_dst(&fl6, opt, &final);
+ 
+ 	dst = ip6_dst_lookup_flow(sk, &fl6, final_p, true);
+ 	if (IS_ERR(dst)) {
+@@ -950,9 +960,8 @@ static int dccp_v6_connect(struct sock *
+ 	__ip6_dst_store(sk, dst, NULL, NULL);
+ 
+ 	icsk->icsk_ext_hdr_len = 0;
+-	if (np->opt != NULL)
+-		icsk->icsk_ext_hdr_len = (np->opt->opt_flen +
+-					  np->opt->opt_nflen);
++	if (opt)
++		icsk->icsk_ext_hdr_len = opt->opt_flen + opt->opt_nflen;
+ 
+ 	inet->inet_dport = usin->sin6_port;
+ 
+diff -duprN mm/net/ieee802154/dgram.c n/net/ieee802154/dgram.c
+--- mm/net/ieee802154/dgram.c	2016-09-20 17:40:10.000000000 +0530
++++ n/net/ieee802154/dgram.c	2017-03-31 10:42:44.000000000 +0530
+@@ -315,9 +315,8 @@ static int dgram_recvmsg(struct kiocb *i
+ 	if (saddr) {
+ 		saddr->family = AF_IEEE802154;
+ 		saddr->addr = mac_cb(skb)->sa;
+-	}
+-	if (addr_len)
+ 		*addr_len = sizeof(*saddr);
++	}
+ 
+ 	if (flags & MSG_TRUNC)
+ 		copied = skb->len;
+diff -duprN mm/net/ipc_router/ipc_router_core.c n/net/ipc_router/ipc_router_core.c
+--- mm/net/ipc_router/ipc_router_core.c	2016-09-20 17:40:09.000000000 +0530
++++ n/net/ipc_router/ipc_router_core.c	2017-03-31 10:42:44.000000000 +0530
+@@ -1,4 +1,4 @@
+-/* Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
++/* Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License version 2 and
+@@ -2975,7 +2975,7 @@ int msm_ipc_router_get_curr_pkt_size(str
+ 
+ int msm_ipc_router_bind_control_port(struct msm_ipc_port *port_ptr)
+ {
+-	if (!port_ptr)
++	if (unlikely(!port_ptr || port_ptr->type != CLIENT_PORT))
+ 		return -EINVAL;
+ 
+ 	down_write(&local_ports_lock_lha2);
+diff -duprN mm/net/ipv4/datagram.c n/net/ipv4/datagram.c
+--- mm/net/ipv4/datagram.c	2016-09-20 17:40:09.000000000 +0530
++++ n/net/ipv4/datagram.c	2017-03-31 10:42:44.000000000 +0530
+@@ -86,18 +86,26 @@ out:
+ }
+ EXPORT_SYMBOL(ip4_datagram_connect);
+ 
++/* Because UDP xmit path can manipulate sk_dst_cache without holding
++ * socket lock, we need to use sk_dst_set() here,
++ * even if we own the socket lock.
++ */
+ void ip4_datagram_release_cb(struct sock *sk)
+ {
+ 	const struct inet_sock *inet = inet_sk(sk);
+ 	const struct ip_options_rcu *inet_opt;
+ 	__be32 daddr = inet->inet_daddr;
++	struct dst_entry *dst;
+ 	struct flowi4 fl4;
+ 	struct rtable *rt;
+ 
+-	if (! __sk_dst_get(sk) || __sk_dst_check(sk, 0))
+-		return;
+-
+ 	rcu_read_lock();
++
++	dst = __sk_dst_get(sk);
++	if (!dst || !dst->obsolete || dst->ops->check(dst, 0)) {
++		rcu_read_unlock();
++		return;
++	}
+ 	inet_opt = rcu_dereference(inet->inet_opt);
+ 	if (inet_opt && inet_opt->opt.srr)
+ 		daddr = inet_opt->opt.faddr;
+@@ -105,8 +113,10 @@ void ip4_datagram_release_cb(struct sock
+ 				   inet->inet_saddr, inet->inet_dport,
+ 				   inet->inet_sport, sk->sk_protocol,
+ 				   RT_CONN_FLAGS(sk), sk->sk_bound_dev_if);
+-	if (!IS_ERR(rt))
+-		__sk_dst_set(sk, &rt->dst);
++
++	dst = !IS_ERR(rt) ? &rt->dst : NULL;
++	sk_dst_set(sk, dst);
++
+ 	rcu_read_unlock();
+ }
+ EXPORT_SYMBOL_GPL(ip4_datagram_release_cb);
+diff -duprN mm/net/ipv4/inet_diag.c n/net/ipv4/inet_diag.c
+--- mm/net/ipv4/inet_diag.c	2016-09-20 17:40:10.000000000 +0530
++++ n/net/ipv4/inet_diag.c	2017-03-31 10:42:44.000000000 +0530
+@@ -279,15 +279,12 @@ static int sk_diag_fill(struct sock *sk,
+ 	return inet_csk_diag_fill(sk, skb, r, user_ns, portid, seq, nlmsg_flags, unlh);
+ }
+ 
+-int inet_diag_dump_one_icsk(struct inet_hashinfo *hashinfo, struct sk_buff *in_skb,
+-		const struct nlmsghdr *nlh, struct inet_diag_req_v2 *req)
++struct sock *inet_diag_find_one_icsk(struct net *net,
++				     struct inet_hashinfo *hashinfo,
++				     struct inet_diag_req_v2 *req)
+ {
+-	int err;
+ 	struct sock *sk;
+-	struct sk_buff *rep;
+-	struct net *net = sock_net(in_skb->sk);
+ 
+-	err = -EINVAL;
+ 	if (req->sdiag_family == AF_INET) {
+ 		sk = inet_lookup(net, hashinfo, req->id.idiag_dst[0],
+ 				 req->id.idiag_dport, req->id.idiag_src[0],
+@@ -295,25 +292,53 @@ int inet_diag_dump_one_icsk(struct inet_
+ 	}
+ #if IS_ENABLED(CONFIG_IPV6)
+ 	else if (req->sdiag_family == AF_INET6) {
+-		sk = inet6_lookup(net, hashinfo,
+-				  (struct in6_addr *)req->id.idiag_dst,
+-				  req->id.idiag_dport,
+-				  (struct in6_addr *)req->id.idiag_src,
+-				  req->id.idiag_sport,
+-				  req->id.idiag_if);
++		if (ipv6_addr_v4mapped((struct in6_addr *)req->id.idiag_dst) &&
++		    ipv6_addr_v4mapped((struct in6_addr *)req->id.idiag_src))
++			sk = inet_lookup(net, hashinfo, req->id.idiag_dst[3],
++					 req->id.idiag_dport, req->id.idiag_src[3],
++					 req->id.idiag_sport, req->id.idiag_if);
++		else
++			sk = inet6_lookup(net, hashinfo,
++					  (struct in6_addr *)req->id.idiag_dst,
++					  req->id.idiag_dport,
++					  (struct in6_addr *)req->id.idiag_src,
++					  req->id.idiag_sport,
++					  req->id.idiag_if);
+ 	}
+ #endif
+ 	else {
+-		goto out_nosk;
++		return ERR_PTR(-EINVAL);
+ 	}
+ 
+-	err = -ENOENT;
+-	if (sk == NULL)
+-		goto out_nosk;
++	if (!sk)
++		return ERR_PTR(-ENOENT);
+ 
+-	err = sock_diag_check_cookie(sk, req->id.idiag_cookie);
+-	if (err)
+-		goto out;
++	if (sock_diag_check_cookie(sk, req->id.idiag_cookie)) {
++		/* NOTE: forward-ports should use sock_gen_put(sk) instead. */
++		if (sk->sk_state == TCP_TIME_WAIT)
++			inet_twsk_put((struct inet_timewait_sock *)sk);
++		else
++			sock_put(sk);
++		return ERR_PTR(-ENOENT);
++	}
++
++	return sk;
++}
++EXPORT_SYMBOL_GPL(inet_diag_find_one_icsk);
++
++int inet_diag_dump_one_icsk(struct inet_hashinfo *hashinfo,
++			    struct sk_buff *in_skb,
++			    const struct nlmsghdr *nlh,
++			    struct inet_diag_req_v2 *req)
++{
++	struct net *net = sock_net(in_skb->sk);
++	struct sk_buff *rep;
++	struct sock *sk;
++	int err;
++
++	sk = inet_diag_find_one_icsk(net, hashinfo, req);
++	if (IS_ERR(sk))
++		return PTR_ERR(sk);
+ 
+ 	rep = nlmsg_new(sizeof(struct inet_diag_msg) +
+ 			sizeof(struct inet_diag_meminfo) +
+@@ -344,12 +369,11 @@ out:
+ 		else
+ 			sock_put(sk);
+ 	}
+-out_nosk:
+ 	return err;
+ }
+ EXPORT_SYMBOL_GPL(inet_diag_dump_one_icsk);
+ 
+-static int inet_diag_get_exact(struct sk_buff *in_skb,
++static int inet_diag_cmd_exact(int cmd, struct sk_buff *in_skb,
+ 			       const struct nlmsghdr *nlh,
+ 			       struct inet_diag_req_v2 *req)
+ {
+@@ -359,8 +383,12 @@ static int inet_diag_get_exact(struct sk
+ 	handler = inet_diag_lock_handler(req->sdiag_protocol);
+ 	if (IS_ERR(handler))
+ 		err = PTR_ERR(handler);
+-	else
++	else if (cmd == SOCK_DIAG_BY_FAMILY)
+ 		err = handler->dump_one(in_skb, nlh, req);
++	else if (cmd == SOCK_DESTROY_BACKPORT && handler->destroy)
++		err = handler->destroy(in_skb, req);
++	else
++		err = -EOPNOTSUPP;
+ 	inet_diag_unlock_handler(handler);
+ 
+ 	return err;
+@@ -1053,7 +1081,7 @@ static int inet_diag_get_exact_compat(st
+ 	req.idiag_states = rc->idiag_states;
+ 	req.id = rc->id;
+ 
+-	return inet_diag_get_exact(in_skb, nlh, &req);
++	return inet_diag_cmd_exact(SOCK_DIAG_BY_FAMILY, in_skb, nlh, &req);
+ }
+ 
+ static int inet_diag_rcv_msg_compat(struct sk_buff *skb, struct nlmsghdr *nlh)
+@@ -1087,7 +1115,7 @@ static int inet_diag_rcv_msg_compat(stru
+ 	return inet_diag_get_exact_compat(skb, nlh);
+ }
+ 
+-static int inet_diag_handler_dump(struct sk_buff *skb, struct nlmsghdr *h)
++static int inet_diag_handler_cmd(struct sk_buff *skb, struct nlmsghdr *h)
+ {
+ 	int hdrlen = sizeof(struct inet_diag_req_v2);
+ 	struct net *net = sock_net(skb->sk);
+@@ -1095,7 +1123,8 @@ static int inet_diag_handler_dump(struct
+ 	if (nlmsg_len(h) < hdrlen)
+ 		return -EINVAL;
+ 
+-	if (h->nlmsg_flags & NLM_F_DUMP) {
++	if (h->nlmsg_type == SOCK_DIAG_BY_FAMILY &&
++	    h->nlmsg_flags & NLM_F_DUMP) {
+ 		if (nlmsg_attrlen(h, hdrlen)) {
+ 			struct nlattr *attr;
+ 			attr = nlmsg_find_attr(h, hdrlen,
+@@ -1113,17 +1142,19 @@ static int inet_diag_handler_dump(struct
+ 		}
+ 	}
+ 
+-	return inet_diag_get_exact(skb, h, nlmsg_data(h));
++	return inet_diag_cmd_exact(h->nlmsg_type, skb, h, nlmsg_data(h));
+ }
+ 
+ static const struct sock_diag_handler inet_diag_handler = {
+ 	.family = AF_INET,
+-	.dump = inet_diag_handler_dump,
++	.dump = inet_diag_handler_cmd,
++	.destroy = inet_diag_handler_cmd,
+ };
+ 
+ static const struct sock_diag_handler inet6_diag_handler = {
+ 	.family = AF_INET6,
+-	.dump = inet_diag_handler_dump,
++	.dump = inet_diag_handler_cmd,
++	.destroy = inet_diag_handler_cmd,
+ };
+ 
+ int inet_diag_register(const struct inet_diag_handler *h)
+diff -duprN mm/net/ipv4/netfilter/Kconfig n/net/ipv4/netfilter/Kconfig
+--- mm/net/ipv4/netfilter/Kconfig	2016-09-20 17:40:10.000000000 +0530
++++ n/net/ipv4/netfilter/Kconfig	2017-03-31 10:42:44.000000000 +0530
+@@ -110,18 +110,6 @@ config IP_NF_TARGET_REJECT
+ 
+ 	  To compile it as a module, choose M here.  If unsure, say N.
+ 
+-config IP_NF_TARGET_REJECT_SKERR
+-	bool "Force socket error when rejecting with icmp*"
+-	depends on IP_NF_TARGET_REJECT
+-	default n
+-	help
+-          This option enables turning a "--reject-with icmp*" into a matching
+-          socket error also.
+-	  The REJECT target normally allows sending an ICMP message. But it
+-          leaves the local socket unaware of any ingress rejects.
+-
+-	  If unsure, say N.
+-
+ config IP_NF_TARGET_ULOG
+ 	tristate "ULOG target support"
+ 	default m if NETFILTER_ADVANCED=n
+diff -duprN mm/net/ipv4/netfilter/arp_tables.c n/net/ipv4/netfilter/arp_tables.c
+--- mm/net/ipv4/netfilter/arp_tables.c	2016-09-20 17:40:10.000000000 +0530
++++ n/net/ipv4/netfilter/arp_tables.c	2017-03-31 10:42:44.000000000 +0530
+@@ -350,11 +350,12 @@ unsigned int arpt_do_table(struct sk_buf
+ }
+ 
+ /* All zeroes == unconditional rule. */
+-static inline bool unconditional(const struct arpt_arp *arp)
++static inline bool unconditional(const struct arpt_entry *e)
+ {
+ 	static const struct arpt_arp uncond;
+ 
+-	return memcmp(arp, &uncond, sizeof(uncond)) == 0;
++	return e->target_offset == sizeof(struct arpt_entry) &&
++	       memcmp(&e->arp, &uncond, sizeof(uncond)) == 0;
+ }
+ 
+ /* Figures out from what hook each rule can be called: returns 0 if
+@@ -393,11 +394,10 @@ static int mark_source_chains(const stru
+ 				|= ((1 << hook) | (1 << NF_ARP_NUMHOOKS));
+ 
+ 			/* Unconditional return/END. */
+-			if ((e->target_offset == sizeof(struct arpt_entry) &&
++			if ((unconditional(e) &&
+ 			     (strcmp(t->target.u.user.name,
+ 				     XT_STANDARD_TARGET) == 0) &&
+-			     t->verdict < 0 && unconditional(&e->arp)) ||
+-			    visited) {
++			     t->verdict < 0) || visited) {
+ 				unsigned int oldpos, size;
+ 
+ 				if ((strcmp(t->target.u.user.name,
+@@ -542,7 +542,7 @@ static bool check_underflow(const struct
+ 	const struct xt_entry_target *t;
+ 	unsigned int verdict;
+ 
+-	if (!unconditional(&e->arp))
++	if (!unconditional(e))
+ 		return false;
+ 	t = arpt_get_target_c(e);
+ 	if (strcmp(t->u.user.name, XT_STANDARD_TARGET) != 0)
+@@ -583,9 +583,9 @@ static inline int check_entry_size_and_h
+ 			newinfo->hook_entry[h] = hook_entries[h];
+ 		if ((unsigned char *)e - base == underflows[h]) {
+ 			if (!check_underflow(e)) {
+-				pr_err("Underflows must be unconditional and "
+-				       "use the STANDARD target with "
+-				       "ACCEPT/DROP\n");
++				pr_debug("Underflows must be unconditional and "
++					 "use the STANDARD target with "
++					 "ACCEPT/DROP\n");
+ 				return -EINVAL;
+ 			}
+ 			newinfo->underflow[h] = underflows[h];
+diff -duprN mm/net/ipv4/netfilter/ip_tables.c n/net/ipv4/netfilter/ip_tables.c
+--- mm/net/ipv4/netfilter/ip_tables.c	2016-09-20 17:40:10.000000000 +0530
++++ n/net/ipv4/netfilter/ip_tables.c	2017-03-31 10:42:44.000000000 +0530
+@@ -168,11 +168,12 @@ get_entry(const void *base, unsigned int
+ 
+ /* All zeroes == unconditional rule. */
+ /* Mildly perf critical (only if packet tracing is on) */
+-static inline bool unconditional(const struct ipt_ip *ip)
++static inline bool unconditional(const struct ipt_entry *e)
+ {
+ 	static const struct ipt_ip uncond;
+ 
+-	return memcmp(ip, &uncond, sizeof(uncond)) == 0;
++	return e->target_offset == sizeof(struct ipt_entry) &&
++	       memcmp(&e->ip, &uncond, sizeof(uncond)) == 0;
+ #undef FWINV
+ }
+ 
+@@ -229,11 +230,10 @@ get_chainname_rulenum(const struct ipt_e
+ 	} else if (s == e) {
+ 		(*rulenum)++;
+ 
+-		if (s->target_offset == sizeof(struct ipt_entry) &&
++		if (unconditional(s) &&
+ 		    strcmp(t->target.u.kernel.target->name,
+ 			   XT_STANDARD_TARGET) == 0 &&
+-		   t->verdict < 0 &&
+-		   unconditional(&s->ip)) {
++		   t->verdict < 0) {
+ 			/* Tail of chains: STANDARD target (return/policy) */
+ 			*comment = *chainname == hookname
+ 				? comments[NF_IP_TRACE_COMMENT_POLICY]
+@@ -467,11 +467,10 @@ mark_source_chains(const struct xt_table
+ 			e->comefrom |= ((1 << hook) | (1 << NF_INET_NUMHOOKS));
+ 
+ 			/* Unconditional return/END. */
+-			if ((e->target_offset == sizeof(struct ipt_entry) &&
++			if ((unconditional(e) &&
+ 			     (strcmp(t->target.u.user.name,
+ 				     XT_STANDARD_TARGET) == 0) &&
+-			     t->verdict < 0 && unconditional(&e->ip)) ||
+-			    visited) {
++			     t->verdict < 0) || visited) {
+ 				unsigned int oldpos, size;
+ 
+ 				if ((strcmp(t->target.u.user.name,
+@@ -704,7 +703,7 @@ static bool check_underflow(const struct
+ 	const struct xt_entry_target *t;
+ 	unsigned int verdict;
+ 
+-	if (!unconditional(&e->ip))
++	if (!unconditional(e))
+ 		return false;
+ 	t = ipt_get_target_c(e);
+ 	if (strcmp(t->u.user.name, XT_STANDARD_TARGET) != 0)
+@@ -746,9 +745,9 @@ check_entry_size_and_hooks(struct ipt_en
+ 			newinfo->hook_entry[h] = hook_entries[h];
+ 		if ((unsigned char *)e - base == underflows[h]) {
+ 			if (!check_underflow(e)) {
+-				pr_err("Underflows must be unconditional and "
+-				       "use the STANDARD target with "
+-				       "ACCEPT/DROP\n");
++				pr_debug("Underflows must be unconditional and "
++					 "use the STANDARD target with "
++					 "ACCEPT/DROP\n");
+ 				return -EINVAL;
+ 			}
+ 			newinfo->underflow[h] = underflows[h];
+diff -duprN mm/net/ipv4/netfilter/ipt_REJECT.c n/net/ipv4/netfilter/ipt_REJECT.c
+--- mm/net/ipv4/netfilter/ipt_REJECT.c	2016-09-20 17:40:10.000000000 +0530
++++ n/net/ipv4/netfilter/ipt_REJECT.c	2017-03-31 10:42:44.000000000 +0530
+@@ -129,14 +129,6 @@ static void send_reset(struct sk_buff *o
+ static inline void send_unreach(struct sk_buff *skb_in, int code)
+ {
+ 	icmp_send(skb_in, ICMP_DEST_UNREACH, code, 0);
+-#ifdef CONFIG_IP_NF_TARGET_REJECT_SKERR
+-	if (skb_in->sk) {
+-		skb_in->sk->sk_err = icmp_err_convert[code].errno;
+-		skb_in->sk->sk_error_report(skb_in->sk);
+-		pr_debug("ipt_REJECT: sk_err=%d for skb=%p sk=%p\n",
+-			skb_in->sk->sk_err, skb_in, skb_in->sk);
+-	}
+-#endif
+ }
+ 
+ static unsigned int
+diff -duprN mm/net/ipv4/ping.c n/net/ipv4/ping.c
+--- mm/net/ipv4/ping.c	2016-09-20 17:40:09.000000000 +0530
++++ n/net/ipv4/ping.c	2017-03-31 10:42:44.000000000 +0530
+@@ -649,7 +649,7 @@ int ping_common_sendmsg(int family, stru
+ 			void *user_icmph, size_t icmph_len) {
+ 	u8 type, code;
+ 
+-	if (len > 0xFFFF)
++	if (len > 0xFFFF || len < icmph_len)
+ 		return -EMSGSIZE;
+ 
+ 	/*
+@@ -847,8 +847,6 @@ int ping_recvmsg(struct kiocb *iocb, str
+ {
+ 	struct inet_sock *isk = inet_sk(sk);
+ 	int family = sk->sk_family;
+-	struct sockaddr_in *sin;
+-	struct sockaddr_in6 *sin6;
+ 	struct sk_buff *skb;
+ 	int copied, err;
+ 
+@@ -858,13 +856,6 @@ int ping_recvmsg(struct kiocb *iocb, str
+ 	if (flags & MSG_OOB)
+ 		goto out;
+ 
+-	if (addr_len) {
+-		if (family == AF_INET)
+-			*addr_len = sizeof(*sin);
+-		else if (family == AF_INET6 && addr_len)
+-			*addr_len = sizeof(*sin6);
+-	}
+-
+ 	if (flags & MSG_ERRQUEUE) {
+ 		if (family == AF_INET) {
+ 			return ip_recv_error(sk, msg, len);
+@@ -894,7 +885,7 @@ int ping_recvmsg(struct kiocb *iocb, str
+ 
+ 	/* Copy the address and add cmsg data. */
+ 	if (family == AF_INET) {
+-		sin = (struct sockaddr_in *) msg->msg_name;
++		struct sockaddr_in *sin = (struct sockaddr_in *)msg->msg_name;
+ 		
+ 		if(sin)
+ 		{
+@@ -902,6 +893,7 @@ int ping_recvmsg(struct kiocb *iocb, str
+ 			sin->sin_port = 0 /* skb->h.uh->source */;
+ 			sin->sin_addr.s_addr = ip_hdr(skb)->saddr;
+ 			memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
++			*addr_len = sizeof(*sin);
+ 		}
+ 
+ 		if (isk->cmsg_flags)
+@@ -911,7 +903,8 @@ int ping_recvmsg(struct kiocb *iocb, str
+ 	} else if (family == AF_INET6) {
+ 		struct ipv6_pinfo *np = inet6_sk(sk);
+ 		struct ipv6hdr *ip6 = ipv6_hdr(skb);
+-		sin6 = (struct sockaddr_in6 *) msg->msg_name;
++		struct sockaddr_in6 *sin6 =
++			(struct sockaddr_in6 *)msg->msg_name;
+ 		
+ 		if(sin6)
+ 		{
+@@ -925,6 +918,7 @@ int ping_recvmsg(struct kiocb *iocb, str
+ 
+ 			sin6->sin6_scope_id = ipv6_iface_scope_id(&sin6->sin6_addr,
+ 								  IP6CB(skb)->iif);
++			*addr_len = sizeof(*sin6);
+ 		}
+ 
+ 		if (inet6_sk(sk)->rxopt.all)
+diff -duprN mm/net/ipv4/raw.c n/net/ipv4/raw.c
+--- mm/net/ipv4/raw.c	2016-09-20 17:40:09.000000000 +0530
++++ n/net/ipv4/raw.c	2017-03-31 10:42:44.000000000 +0530
+@@ -692,9 +692,6 @@ static int raw_recvmsg(struct kiocb *ioc
+ 	if (flags & MSG_OOB)
+ 		goto out;
+ 
+-	if (addr_len)
+-		*addr_len = sizeof(*sin);
+-
+ 	if (flags & MSG_ERRQUEUE) {
+ 		err = ip_recv_error(sk, msg, len);
+ 		goto out;
+@@ -722,6 +719,7 @@ static int raw_recvmsg(struct kiocb *ioc
+ 		sin->sin_addr.s_addr = ip_hdr(skb)->saddr;
+ 		sin->sin_port = 0;
+ 		memset(&sin->sin_zero, 0, sizeof(sin->sin_zero));
++		*addr_len = sizeof(*sin);
+ 	}
+ 	if (inet->cmsg_flags)
+ 		ip_cmsg_recv(msg, skb);
+diff -duprN mm/net/ipv4/tcp.c n/net/ipv4/tcp.c
+--- mm/net/ipv4/tcp.c	2016-09-20 17:40:11.000000000 +0530
++++ n/net/ipv4/tcp.c	2017-03-31 10:42:44.000000000 +0530
+@@ -3364,6 +3364,38 @@ void tcp_done(struct sock *sk)
+ }
+ EXPORT_SYMBOL_GPL(tcp_done);
+ 
++int tcp_abort(struct sock *sk, int err)
++{
++	if (sk->sk_state == TCP_TIME_WAIT) {
++		inet_twsk_put((struct inet_timewait_sock *)sk);
++		return -EOPNOTSUPP;
++	}
++
++	/* Don't race with userspace socket closes such as tcp_close. */
++	lock_sock(sk);
++
++	/* Don't race with BH socket closes such as inet_csk_listen_stop. */
++	local_bh_disable();
++	bh_lock_sock(sk);
++
++	if (!sock_flag(sk, SOCK_DEAD)) {
++		sk->sk_err = err;
++		/* This barrier is coupled with smp_rmb() in tcp_poll() */
++		smp_wmb();
++		sk->sk_error_report(sk);
++		if (tcp_need_reset(sk->sk_state))
++			tcp_send_active_reset(sk, GFP_ATOMIC);
++		tcp_done(sk);
++	}
++
++	bh_unlock_sock(sk);
++local_bh_enable();
++	release_sock(sk);
++	sock_put(sk);
++	return 0;
++}
++EXPORT_SYMBOL_GPL(tcp_abort);
++
+ extern struct tcp_congestion_ops tcp_reno;
+ 
+ static __initdata unsigned long thash_entries;
+@@ -3567,14 +3599,20 @@ restart:
+ 			sock_hold(sk);
+ 			spin_unlock_bh(lock);
+ 
++			lock_sock(sk);
+ 			local_bh_disable();
+ 			bh_lock_sock(sk);
+-			sk->sk_err = ETIMEDOUT;
+-			sk->sk_error_report(sk);
+ 
+-			tcp_done(sk);
++			if (!sock_flag(sk, SOCK_DEAD)) {
++				smp_wmb();  /* be consistent with tcp_reset */
++				sk->sk_err = ETIMEDOUT;
++				sk->sk_error_report(sk);
++				tcp_done(sk);
++			}
++
+ 			bh_unlock_sock(sk);
+ 			local_bh_enable();
++			release_sock(sk);
+ 			sock_put(sk);
+ 
+ 			goto restart;
+diff -duprN mm/net/ipv4/tcp_diag.c n/net/ipv4/tcp_diag.c
+--- mm/net/ipv4/tcp_diag.c	2016-09-20 17:40:09.000000000 +0530
++++ n/net/ipv4/tcp_diag.c	2017-03-31 10:42:44.000000000 +0530
+@@ -11,6 +11,8 @@
+ 
+ 
+ #include <linux/module.h>
++#include <linux/net.h>
++#include <linux/sock_diag.h>
+ #include <linux/inet_diag.h>
+ 
+ #include <linux/tcp.h>
+@@ -46,11 +48,24 @@ static int tcp_diag_dump_one(struct sk_b
+ 	return inet_diag_dump_one_icsk(&tcp_hashinfo, in_skb, nlh, req);
+ }
+ 
++static int tcp_diag_destroy(struct sk_buff *in_skb,
++			    struct inet_diag_req_v2 *req)
++{
++	struct net *net = sock_net(in_skb->sk);
++	struct sock *sk = inet_diag_find_one_icsk(net, &tcp_hashinfo, req);
++
++	if (IS_ERR(sk))
++		return PTR_ERR(sk);
++
++	return sock_diag_destroy(sk, ECONNABORTED);
++}
++
+ static const struct inet_diag_handler tcp_diag_handler = {
+ 	.dump		 = tcp_diag_dump,
+ 	.dump_one	 = tcp_diag_dump_one,
+ 	.idiag_get_info	 = tcp_diag_get_info,
+ 	.idiag_type	 = IPPROTO_TCP,
++	.destroy	 = tcp_diag_destroy,
+ };
+ 
+ static int __init tcp_diag_init(void)
+diff -duprN mm/net/ipv4/tcp_input.c n/net/ipv4/tcp_input.c
+--- mm/net/ipv4/tcp_input.c	2016-09-20 17:40:09.000000000 +0530
++++ n/net/ipv4/tcp_input.c	2017-03-31 10:42:44.000000000 +0530
+@@ -68,6 +68,7 @@
+ #include <linux/module.h>
+ #include <linux/sysctl.h>
+ #include <linux/kernel.h>
++#include <linux/reciprocal_div.h>
+ #include <net/dst.h>
+ #include <net/tcp.h>
+ #include <net/inet_common.h>
+@@ -87,7 +88,7 @@ int sysctl_tcp_adv_win_scale __read_most
+ EXPORT_SYMBOL(sysctl_tcp_adv_win_scale);
+ 
+ /* rfc5961 challenge ack rate limiting */
+-int sysctl_tcp_challenge_ack_limit = 100;
++int sysctl_tcp_challenge_ack_limit = 1000;
+ 
+ int sysctl_tcp_stdurg __read_mostly;
+ int sysctl_tcp_rfc1337 __read_mostly;
+@@ -3258,12 +3259,19 @@ static void tcp_send_challenge_ack(struc
+ 	static u32 challenge_timestamp;
+ 	static unsigned int challenge_count;
+ 	u32 now = jiffies / HZ;
++	u32 count;
+ 
+ 	if (now != challenge_timestamp) {
++		u32 half = (sysctl_tcp_challenge_ack_limit + 1) >> 1;
++
+ 		challenge_timestamp = now;
+-		challenge_count = 0;
++		ACCESS_ONCE(challenge_count) = half +
++				  reciprocal_divide(prandom_u32(),
++					sysctl_tcp_challenge_ack_limit);
+ 	}
+-	if (++challenge_count <= sysctl_tcp_challenge_ack_limit) {
++	count = ACCESS_ONCE(challenge_count);
++	if (count > 0) {
++		ACCESS_ONCE(challenge_count) = count - 1;
+ 		NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_TCPCHALLENGEACK);
+ 		tcp_send_ack(sk);
+ 	}
+@@ -4897,7 +4905,7 @@ static int tcp_copy_to_iovec(struct sock
+ 		err = skb_copy_datagram_iovec(skb, hlen, tp->ucopy.iov, chunk);
+ 	else
+ 		err = skb_copy_and_csum_datagram_iovec(skb, hlen,
+-						       tp->ucopy.iov);
++						       tp->ucopy.iov, chunk);
+ 
+ 	if (!err) {
+ 		tp->ucopy.len -= chunk;
+@@ -5251,7 +5259,7 @@ slow_path:
+ 	if (len < (th->doff << 2) || tcp_checksum_complete_user(sk, skb))
+ 		goto csum_error;
+ 
+-	if (!th->ack && !th->rst)
++	if (!th->ack && !th->rst && !th->syn)
+ 		goto discard;
+ 
+ 	/*
+@@ -5666,7 +5674,7 @@ int tcp_rcv_state_process(struct sock *s
+ 			goto discard;
+ 	}
+ 
+-	if (!th->ack && !th->rst)
++	if (!th->ack && !th->rst && !th->syn)
+ 		goto discard;
+ 
+ 	if (!tcp_validate_incoming(sk, skb, th, 0))
+diff -duprN mm/net/ipv4/tcp_ipv4.c n/net/ipv4/tcp_ipv4.c
+--- mm/net/ipv4/tcp_ipv4.c	2016-09-20 17:40:09.000000000 +0530
++++ n/net/ipv4/tcp_ipv4.c	2017-03-31 10:42:44.000000000 +0530
+@@ -2895,6 +2895,7 @@ struct proto tcp_prot = {
+ 	.destroy_cgroup		= tcp_destroy_cgroup,
+ 	.proto_cgroup		= tcp_proto_cgroup,
+ #endif
++	.diag_destroy		= tcp_abort,
+ };
+ EXPORT_SYMBOL(tcp_prot);
+ 
+diff -duprN mm/net/ipv4/udp.c n/net/ipv4/udp.c
+--- mm/net/ipv4/udp.c	2016-09-20 17:40:09.000000000 +0530
++++ n/net/ipv4/udp.c	2017-03-31 10:45:48.000000000 +0530
+@@ -1206,14 +1206,9 @@ int udp_recvmsg(struct kiocb *iocb, stru
+ 	int peeked, off = 0;
+ 	int err;
+ 	int is_udplite = IS_UDPLITE(sk);
++	bool checksum_valid = false;
+ 	bool slow;
+ 
+-	/*
+-	 *	Check any passed addresses
+-	 */
+-	if (addr_len)
+-		*addr_len = sizeof(*sin);
+-
+ 	if (flags & MSG_ERRQUEUE)
+ 		return ip_recv_error(sk, msg, len);
+ 
+@@ -1237,17 +1232,18 @@ try_again:
+ 	 */
+ 
+ 	if (copied < ulen || UDP_SKB_CB(skb)->partial_cov) {
+-		if (udp_lib_checksum_complete(skb))
++		checksum_valid = !udp_lib_checksum_complete(skb);
++		if (!checksum_valid)
+ 			goto csum_copy_err;
+ 	}
+ 
+-	if (skb_csum_unnecessary(skb))
++	if (checksum_valid || skb_csum_unnecessary(skb))
+ 		err = skb_copy_datagram_iovec(skb, sizeof(struct udphdr),
+ 					      msg->msg_iov, copied);
+ 	else {
+ 		err = skb_copy_and_csum_datagram_iovec(skb,
+ 						       sizeof(struct udphdr),
+-						       msg->msg_iov);
++						       msg->msg_iov, copied);
+ 
+ 		if (err == -EINVAL)
+ 			goto csum_copy_err;
+@@ -1275,6 +1271,7 @@ try_again:
+ 		sin->sin_port = udp_hdr(skb)->source;
+ 		sin->sin_addr.s_addr = ip_hdr(skb)->saddr;
+ 		memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
++		*addr_len = sizeof(*sin);
+ 	}
+ 	if (inet->cmsg_flags)
+ 		ip_cmsg_recv(msg, skb);
+diff -duprN mm/net/ipv6/af_inet6.c n/net/ipv6/af_inet6.c
+--- mm/net/ipv6/af_inet6.c	2016-09-20 17:40:11.000000000 +0530
++++ n/net/ipv6/af_inet6.c	2017-03-31 10:42:44.000000000 +0530
+@@ -451,9 +451,11 @@ void inet6_destroy_sock(struct sock *sk)
+ 
+ 	/* Free tx options */
+ 
+-	opt = xchg(&np->opt, NULL);
+-	if (opt != NULL)
+-		sock_kfree_s(sk, opt, opt->tot_len);
++	opt = xchg((__force struct ipv6_txoptions **)&np->opt, NULL);
++	if (opt) {
++		atomic_sub(opt->tot_len, &sk->sk_omem_alloc);
++		txopt_put(opt);
++	}
+ }
+ EXPORT_SYMBOL_GPL(inet6_destroy_sock);
+ 
+@@ -700,7 +702,10 @@ int inet6_sk_rebuild_header(struct sock
+ 		fl6.flowi6_uid = sock_i_uid(sk);
+ 		security_sk_classify_flow(sk, flowi6_to_flowi(&fl6));
+ 
+-		final_p = fl6_update_dst(&fl6, np->opt, &final);
++		rcu_read_lock();
++		final_p = fl6_update_dst(&fl6, rcu_dereference(np->opt),
++					 &final);
++		rcu_read_unlock();
+ 
+ 		dst = ip6_dst_lookup_flow(sk, &fl6, final_p, false);
+ 		if (IS_ERR(dst)) {
+diff -duprN mm/net/ipv6/datagram.c n/net/ipv6/datagram.c
+--- mm/net/ipv6/datagram.c	2016-09-20 17:40:10.000000000 +0530
++++ n/net/ipv6/datagram.c	2017-03-31 10:42:44.000000000 +0530
+@@ -169,8 +169,10 @@ ipv4_connected:
+ 
+ 	security_sk_classify_flow(sk, flowi6_to_flowi(&fl6));
+ 
+-	opt = flowlabel ? flowlabel->opt : np->opt;
++	rcu_read_lock();
++	opt = flowlabel ? flowlabel->opt : rcu_dereference(np->opt);
+ 	final_p = fl6_update_dst(&fl6, opt, &final);
++	rcu_read_unlock();
+ 
+ 	dst = ip6_dst_lookup_flow(sk, &fl6, final_p, true);
+ 	err = 0;
+diff -duprN mm/net/ipv6/exthdrs.c n/net/ipv6/exthdrs.c
+--- mm/net/ipv6/exthdrs.c	2016-09-20 17:40:11.000000000 +0530
++++ n/net/ipv6/exthdrs.c	2017-03-31 10:42:44.000000000 +0530
+@@ -733,6 +733,7 @@ ipv6_dup_options(struct sock *sk, struct
+ 			*((char **)&opt2->dst1opt) += dif;
+ 		if (opt2->srcrt)
+ 			*((char **)&opt2->srcrt) += dif;
++		atomic_set(&opt2->refcnt, 1);
+ 	}
+ 	return opt2;
+ }
+@@ -796,7 +797,7 @@ ipv6_renew_options(struct sock *sk, stru
+ 		return ERR_PTR(-ENOBUFS);
+ 
+ 	memset(opt2, 0, tot_len);
+-
++	atomic_set(&opt2->refcnt, 1);
+ 	opt2->tot_len = tot_len;
+ 	p = (char *)(opt2 + 1);
+ 
+diff -duprN mm/net/ipv6/inet6_connection_sock.c n/net/ipv6/inet6_connection_sock.c
+--- mm/net/ipv6/inet6_connection_sock.c	2016-09-20 17:40:10.000000000 +0530
++++ n/net/ipv6/inet6_connection_sock.c	2017-03-31 10:42:44.000000000 +0530
+@@ -78,7 +78,9 @@ struct dst_entry *inet6_csk_route_req(st
+ 	memset(fl6, 0, sizeof(*fl6));
+ 	fl6->flowi6_proto = IPPROTO_TCP;
+ 	fl6->daddr = treq->rmt_addr;
+-	final_p = fl6_update_dst(fl6, np->opt, &final);
++	rcu_read_lock();
++	final_p = fl6_update_dst(fl6, rcu_dereference(np->opt), &final);
++	rcu_read_unlock();
+ 	fl6->saddr = treq->loc_addr;
+ 	fl6->flowi6_oif = treq->iif;
+ 	fl6->flowi6_mark = inet_rsk(req)->ir_mark;
+@@ -215,7 +217,9 @@ static struct dst_entry *inet6_csk_route
+ 	fl6->flowi6_uid = sock_i_uid(sk);
+ 	security_sk_classify_flow(sk, flowi6_to_flowi(fl6));
+ 
+-	final_p = fl6_update_dst(fl6, np->opt, &final);
++	rcu_read_lock();
++	final_p = fl6_update_dst(fl6, rcu_dereference(np->opt), &final);
++	rcu_read_unlock();
+ 
+ 	dst = __inet6_csk_dst_check(sk, np->dst_cookie);
+ 	if (!dst) {
+@@ -249,7 +253,8 @@ int inet6_csk_xmit(struct sk_buff *skb,
+ 	/* Restore final destination back after routing done */
+ 	fl6.daddr = np->daddr;
+ 
+-	res = ip6_xmit(sk, skb, &fl6, np->opt, np->tclass);
++	res = ip6_xmit(sk, skb, &fl6, rcu_dereference(np->opt),
++		       np->tclass);
+ 	rcu_read_unlock();
+ 	return res;
+ }
+diff -duprN mm/net/ipv6/ipv6_sockglue.c n/net/ipv6/ipv6_sockglue.c
+--- mm/net/ipv6/ipv6_sockglue.c	2016-09-20 17:40:11.000000000 +0530
++++ n/net/ipv6/ipv6_sockglue.c	2017-03-31 10:42:44.000000000 +0530
+@@ -110,10 +110,12 @@ struct ipv6_txoptions *ipv6_update_optio
+ 			icsk->icsk_ext_hdr_len = opt->opt_flen + opt->opt_nflen;
+ 			icsk->icsk_sync_mss(sk, icsk->icsk_pmtu_cookie);
+ 		}
+-		opt = xchg(&inet6_sk(sk)->opt, opt);
++		opt = xchg((__force struct ipv6_txoptions **)&inet6_sk(sk)->opt,
++			   opt);
+ 	} else {
+ 		spin_lock(&sk->sk_dst_lock);
+-		opt = xchg(&inet6_sk(sk)->opt, opt);
++		opt = xchg((__force struct ipv6_txoptions **)&inet6_sk(sk)->opt,
++			   opt);
+ 		spin_unlock(&sk->sk_dst_lock);
+ 	}
+ 	sk_dst_reset(sk);
+@@ -213,9 +215,12 @@ static int do_ipv6_setsockopt(struct soc
+ 				sk->sk_socket->ops = &inet_dgram_ops;
+ 				sk->sk_family = PF_INET;
+ 			}
+-			opt = xchg(&np->opt, NULL);
+-			if (opt)
+-				sock_kfree_s(sk, opt, opt->tot_len);
++			opt = xchg((__force struct ipv6_txoptions **)&np->opt,
++				   NULL);
++			if (opt) {
++				atomic_sub(opt->tot_len, &sk->sk_omem_alloc);
++				txopt_put(opt);
++			}
+ 			pktopt = xchg(&np->pktoptions, NULL);
+ 			kfree_skb(pktopt);
+ 
+@@ -385,7 +390,8 @@ static int do_ipv6_setsockopt(struct soc
+ 		if (optname != IPV6_RTHDR && !ns_capable(net->user_ns, CAP_NET_RAW))
+ 			break;
+ 
+-		opt = ipv6_renew_options(sk, np->opt, optname,
++		opt = rcu_dereference_protected(np->opt, sock_owned_by_user(sk));
++		opt = ipv6_renew_options(sk, opt, optname,
+ 					 (struct ipv6_opt_hdr __user *)optval,
+ 					 optlen);
+ 		if (IS_ERR(opt)) {
+@@ -414,8 +420,10 @@ static int do_ipv6_setsockopt(struct soc
+ 		retv = 0;
+ 		opt = ipv6_update_options(sk, opt);
+ sticky_done:
+-		if (opt)
+-			sock_kfree_s(sk, opt, opt->tot_len);
++		if (opt) {
++			atomic_sub(opt->tot_len, &sk->sk_omem_alloc);
++			txopt_put(opt);
++		}
+ 		break;
+ 	}
+ 
+@@ -468,6 +476,7 @@ sticky_done:
+ 			break;
+ 
+ 		memset(opt, 0, sizeof(*opt));
++		atomic_set(&opt->refcnt, 1);
+ 		opt->tot_len = sizeof(*opt) + optlen;
+ 		retv = -EFAULT;
+ 		if (copy_from_user(opt+1, optval, optlen))
+@@ -484,8 +493,10 @@ update:
+ 		retv = 0;
+ 		opt = ipv6_update_options(sk, opt);
+ done:
+-		if (opt)
+-			sock_kfree_s(sk, opt, opt->tot_len);
++		if (opt) {
++			atomic_sub(opt->tot_len, &sk->sk_omem_alloc);
++			txopt_put(opt);
++		}
+ 		break;
+ 	}
+ 	case IPV6_UNICAST_HOPS:
+@@ -1085,10 +1096,11 @@ static int do_ipv6_getsockopt(struct soc
+ 	case IPV6_RTHDR:
+ 	case IPV6_DSTOPTS:
+ 	{
++		struct ipv6_txoptions *opt;
+ 
+ 		lock_sock(sk);
+-		len = ipv6_getsockopt_sticky(sk, np->opt,
+-					     optname, optval, len);
++		opt = rcu_dereference_protected(np->opt, sock_owned_by_user(sk));
++		len = ipv6_getsockopt_sticky(sk, opt, optname, optval, len);
+ 		release_sock(sk);
+ 		/* check if ipv6_getsockopt_sticky() returns err code */
+ 		if (len < 0)
+diff -duprN mm/net/ipv6/netfilter/Kconfig n/net/ipv6/netfilter/Kconfig
+--- mm/net/ipv6/netfilter/Kconfig	2016-09-20 17:40:11.000000000 +0530
++++ n/net/ipv6/netfilter/Kconfig	2017-03-31 10:42:44.000000000 +0530
+@@ -153,18 +153,6 @@ config IP6_NF_TARGET_REJECT
+ 
+ 	  To compile it as a module, choose M here.  If unsure, say N.
+ 
+-config IP6_NF_TARGET_REJECT_SKERR
+-	bool "Force socket error when rejecting with icmp*"
+-	depends on IP6_NF_TARGET_REJECT
+-	default n
+-	help
+-          This option enables turning a "--reject-with icmp*" into a matching
+-          socket error also.
+-	  The REJECT target normally allows sending an ICMP message. But it
+-          leaves the local socket unaware of any ingress rejects.
+-
+-	  If unsure, say N.
+-
+ config IP6_NF_MANGLE
+ 	tristate "Packet mangling"
+ 	default m if NETFILTER_ADVANCED=n
+diff -duprN mm/net/ipv6/netfilter/ip6_tables.c n/net/ipv6/netfilter/ip6_tables.c
+--- mm/net/ipv6/netfilter/ip6_tables.c	2016-09-20 17:40:11.000000000 +0530
++++ n/net/ipv6/netfilter/ip6_tables.c	2017-03-31 10:42:44.000000000 +0530
+@@ -195,11 +195,12 @@ get_entry(const void *base, unsigned int
+ 
+ /* All zeroes == unconditional rule. */
+ /* Mildly perf critical (only if packet tracing is on) */
+-static inline bool unconditional(const struct ip6t_ip6 *ipv6)
++static inline bool unconditional(const struct ip6t_entry *e)
+ {
+ 	static const struct ip6t_ip6 uncond;
+ 
+-	return memcmp(ipv6, &uncond, sizeof(uncond)) == 0;
++	return e->target_offset == sizeof(struct ip6t_entry) &&
++	       memcmp(&e->ipv6, &uncond, sizeof(uncond)) == 0;
+ }
+ 
+ static inline const struct xt_entry_target *
+@@ -255,11 +256,10 @@ get_chainname_rulenum(const struct ip6t_
+ 	} else if (s == e) {
+ 		(*rulenum)++;
+ 
+-		if (s->target_offset == sizeof(struct ip6t_entry) &&
++		if (unconditional(s) &&
+ 		    strcmp(t->target.u.kernel.target->name,
+ 			   XT_STANDARD_TARGET) == 0 &&
+-		    t->verdict < 0 &&
+-		    unconditional(&s->ipv6)) {
++		    t->verdict < 0) {
+ 			/* Tail of chains: STANDARD target (return/policy) */
+ 			*comment = *chainname == hookname
+ 				? comments[NF_IP6_TRACE_COMMENT_POLICY]
+@@ -477,11 +477,10 @@ mark_source_chains(const struct xt_table
+ 			e->comefrom |= ((1 << hook) | (1 << NF_INET_NUMHOOKS));
+ 
+ 			/* Unconditional return/END. */
+-			if ((e->target_offset == sizeof(struct ip6t_entry) &&
++			if ((unconditional(e) &&
+ 			     (strcmp(t->target.u.user.name,
+ 				     XT_STANDARD_TARGET) == 0) &&
+-			     t->verdict < 0 &&
+-			     unconditional(&e->ipv6)) || visited) {
++			     t->verdict < 0) || visited) {
+ 				unsigned int oldpos, size;
+ 
+ 				if ((strcmp(t->target.u.user.name,
+@@ -715,7 +714,7 @@ static bool check_underflow(const struct
+ 	const struct xt_entry_target *t;
+ 	unsigned int verdict;
+ 
+-	if (!unconditional(&e->ipv6))
++	if (!unconditional(e))
+ 		return false;
+ 	t = ip6t_get_target_c(e);
+ 	if (strcmp(t->u.user.name, XT_STANDARD_TARGET) != 0)
+@@ -757,9 +756,9 @@ check_entry_size_and_hooks(struct ip6t_e
+ 			newinfo->hook_entry[h] = hook_entries[h];
+ 		if ((unsigned char *)e - base == underflows[h]) {
+ 			if (!check_underflow(e)) {
+-				pr_err("Underflows must be unconditional and "
+-				       "use the STANDARD target with "
+-				       "ACCEPT/DROP\n");
++				pr_debug("Underflows must be unconditional and "
++					 "use the STANDARD target with "
++					 "ACCEPT/DROP\n");
+ 				return -EINVAL;
+ 			}
+ 			newinfo->underflow[h] = underflows[h];
+diff -duprN mm/net/ipv6/netfilter/ip6t_REJECT.c n/net/ipv6/netfilter/ip6t_REJECT.c
+--- mm/net/ipv6/netfilter/ip6t_REJECT.c	2016-09-20 17:40:11.000000000 +0530
++++ n/net/ipv6/netfilter/ip6t_REJECT.c	2017-03-31 10:42:44.000000000 +0530
+@@ -180,15 +180,6 @@ send_unreach(struct net *net, struct sk_
+ 		skb_in->dev = net->loopback_dev;
+ 
+ 	icmpv6_send(skb_in, ICMPV6_DEST_UNREACH, code, 0);
+-#ifdef CONFIG_IP6_NF_TARGET_REJECT_SKERR
+-	if (skb_in->sk) {
+-		icmpv6_err_convert(ICMPV6_DEST_UNREACH, code,
+-				   &skb_in->sk->sk_err);
+-		skb_in->sk->sk_error_report(skb_in->sk);
+-		pr_debug("ip6t_REJECT: sk_err=%d for skb=%p sk=%p\n",
+-			skb_in->sk->sk_err, skb_in, skb_in->sk);
+-	}
+-#endif
+ }
+ 
+ static unsigned int
+diff -duprN mm/net/ipv6/raw.c n/net/ipv6/raw.c
+--- mm/net/ipv6/raw.c	2016-09-20 17:40:10.000000000 +0530
++++ n/net/ipv6/raw.c	2017-03-31 10:42:44.000000000 +0530
+@@ -459,9 +459,6 @@ static int rawv6_recvmsg(struct kiocb *i
+ 	if (flags & MSG_OOB)
+ 		return -EOPNOTSUPP;
+ 
+-	if (addr_len)
+-		*addr_len=sizeof(*sin6);
+-
+ 	if (flags & MSG_ERRQUEUE)
+ 		return ipv6_recv_error(sk, msg, len);
+ 
+@@ -485,7 +482,7 @@ static int rawv6_recvmsg(struct kiocb *i
+ 			goto csum_copy_err;
+ 		err = skb_copy_datagram_iovec(skb, 0, msg->msg_iov, copied);
+ 	} else {
+-		err = skb_copy_and_csum_datagram_iovec(skb, 0, msg->msg_iov);
++		err = skb_copy_and_csum_datagram_iovec(skb, 0, msg->msg_iov, copied);
+ 		if (err == -EINVAL)
+ 			goto csum_copy_err;
+ 	}
+@@ -500,6 +497,7 @@ static int rawv6_recvmsg(struct kiocb *i
+ 		sin6->sin6_flowinfo = 0;
+ 		sin6->sin6_scope_id = ipv6_iface_scope_id(&sin6->sin6_addr,
+ 							  IP6CB(skb)->iif);
++		*addr_len = sizeof(*sin6);
+ 	}
+ 
+ 	sock_recv_ts_and_drops(msg, sk, skb);
+@@ -728,6 +726,7 @@ static int rawv6_probe_proto_opt(struct
+ static int rawv6_sendmsg(struct kiocb *iocb, struct sock *sk,
+ 		   struct msghdr *msg, size_t len)
+ {
++	struct ipv6_txoptions *opt_to_free = NULL;
+ 	struct ipv6_txoptions opt_space;
+ 	struct sockaddr_in6 * sin6 = (struct sockaddr_in6 *) msg->msg_name;
+ 	struct in6_addr *daddr, *final_p, final;
+@@ -835,8 +834,10 @@ static int rawv6_sendmsg(struct kiocb *i
+ 		if (!(opt->opt_nflen|opt->opt_flen))
+ 			opt = NULL;
+ 	}
+-	if (opt == NULL)
+-		opt = np->opt;
++	if (!opt) {
++		opt = txopt_get(np);
++		opt_to_free = opt;
++	}
+ 	if (flowlabel)
+ 		opt = fl6_merge_options(&opt_space, flowlabel, opt);
+ 	opt = ipv6_fixup_options(&opt_space, opt);
+@@ -903,6 +904,7 @@ done:
+ 	dst_release(dst);
+ out:
+ 	fl6_sock_release(flowlabel);
++	txopt_put(opt_to_free);
+ 	return err<0?err:len;
+ do_confirm:
+ 	dst_confirm(dst);
+diff -duprN mm/net/ipv6/syncookies.c n/net/ipv6/syncookies.c
+--- mm/net/ipv6/syncookies.c	2016-09-20 17:40:10.000000000 +0530
++++ n/net/ipv6/syncookies.c	2017-03-31 10:42:44.000000000 +0530
+@@ -237,7 +237,7 @@ struct sock *cookie_v6_check(struct sock
+ 		memset(&fl6, 0, sizeof(fl6));
+ 		fl6.flowi6_proto = IPPROTO_TCP;
+ 		fl6.daddr = ireq6->rmt_addr;
+-		final_p = fl6_update_dst(&fl6, np->opt, &final);
++		final_p = fl6_update_dst(&fl6, rcu_dereference(np->opt), &final);
+ 		fl6.saddr = ireq6->loc_addr;
+ 		fl6.flowi6_oif = sk->sk_bound_dev_if;
+ 		fl6.flowi6_mark = ireq->ir_mark;
+diff -duprN mm/net/ipv6/tcp_ipv6.c n/net/ipv6/tcp_ipv6.c
+--- mm/net/ipv6/tcp_ipv6.c	2016-09-20 17:40:10.000000000 +0530
++++ n/net/ipv6/tcp_ipv6.c	2017-03-31 10:42:44.000000000 +0530
+@@ -133,6 +133,7 @@ static int tcp_v6_connect(struct sock *s
+ 	struct ipv6_pinfo *np = inet6_sk(sk);
+ 	struct tcp_sock *tp = tcp_sk(sk);
+ 	struct in6_addr *saddr = NULL, *final_p, final;
++	struct ipv6_txoptions *opt;
+ 	struct rt6_info *rt;
+ 	struct flowi6 fl6;
+ 	struct dst_entry *dst;
+@@ -254,7 +255,8 @@ static int tcp_v6_connect(struct sock *s
+ 	fl6.fl6_sport = inet->inet_sport;
+ 	fl6.flowi6_uid = sock_i_uid(sk);
+ 
+-	final_p = fl6_update_dst(&fl6, np->opt, &final);
++	opt = rcu_dereference_protected(np->opt, sock_owned_by_user(sk));
++	final_p = fl6_update_dst(&fl6, opt, &final);
+ 
+ 	security_sk_classify_flow(sk, flowi6_to_flowi(&fl6));
+ 
+@@ -283,9 +285,9 @@ static int tcp_v6_connect(struct sock *s
+ 		tcp_fetch_timewait_stamp(sk, dst);
+ 
+ 	icsk->icsk_ext_hdr_len = 0;
+-	if (np->opt)
+-		icsk->icsk_ext_hdr_len = (np->opt->opt_flen +
+-					  np->opt->opt_nflen);
++	if (opt)
++		icsk->icsk_ext_hdr_len = opt->opt_flen +
++					 opt->opt_nflen;
+ 
+ 	tp->rx_opt.mss_clamp = IPV6_MIN_MTU - sizeof(struct tcphdr) - sizeof(struct ipv6hdr);
+ 
+@@ -481,7 +483,8 @@ static int tcp_v6_send_synack(struct soc
+ 
+ 		fl6->daddr = treq->rmt_addr;
+ 		skb_set_queue_mapping(skb, queue_mapping);
+-		err = ip6_xmit(sk, skb, fl6, np->opt, np->tclass);
++		err = ip6_xmit(sk, skb, fl6, rcu_dereference(np->opt),
++			       np->tclass);
+ 		err = net_xmit_eval(err);
+ 	}
+ 
+@@ -1090,6 +1093,7 @@ static struct sock * tcp_v6_syn_recv_soc
+ 	struct inet6_request_sock *treq;
+ 	struct ipv6_pinfo *newnp, *np = inet6_sk(sk);
+ 	struct tcp6_sock *newtcp6sk;
++	struct ipv6_txoptions *opt;
+ 	struct inet_sock *newinet;
+ 	struct tcp_sock *newtp;
+ 	struct sock *newsk;
+@@ -1223,13 +1227,15 @@ static struct sock * tcp_v6_syn_recv_soc
+ 	   but we make one more one thing there: reattach optmem
+ 	   to newsk.
+ 	 */
+-	if (np->opt)
+-		newnp->opt = ipv6_dup_options(newsk, np->opt);
+-
++	opt = rcu_dereference(np->opt);
++	if (opt) {
++		opt = ipv6_dup_options(newsk, opt);
++		RCU_INIT_POINTER(newnp->opt, opt);
++	}
+ 	inet_csk(newsk)->icsk_ext_hdr_len = 0;
+-	if (newnp->opt)
+-		inet_csk(newsk)->icsk_ext_hdr_len = (newnp->opt->opt_nflen +
+-						     newnp->opt->opt_flen);
++	if (opt)
++		inet_csk(newsk)->icsk_ext_hdr_len = opt->opt_nflen +
++						    opt->opt_flen;
+ 
+ 	tcp_mtup_init(newsk);
+ 	tcp_sync_mss(newsk, dst_mtu(dst));
+@@ -1948,6 +1954,7 @@ struct proto tcpv6_prot = {
+ 	.proto_cgroup		= tcp_proto_cgroup,
+ #endif
+ 	.clear_sk		= tcp_v6_clear_sk,
++	.diag_destroy		= tcp_abort,
+ };
+ 
+ static const struct inet6_protocol tcpv6_protocol = {
+diff -duprN mm/net/ipv6/udp.c n/net/ipv6/udp.c
+--- mm/net/ipv6/udp.c	2016-09-20 17:40:10.000000000 +0530
++++ n/net/ipv6/udp.c	2017-03-31 10:45:48.000000000 +0530
+@@ -370,12 +370,10 @@ int udpv6_recvmsg(struct kiocb *iocb, st
+ 	int peeked, off = 0;
+ 	int err;
+ 	int is_udplite = IS_UDPLITE(sk);
++	bool checksum_valid = false;
+ 	int is_udp4;
+ 	bool slow;
+ 
+-	if (addr_len)
+-		*addr_len = sizeof(struct sockaddr_in6);
+-
+ 	if (flags & MSG_ERRQUEUE)
+ 		return ipv6_recv_error(sk, msg, len);
+ 
+@@ -404,15 +402,17 @@ try_again:
+ 	 */
+ 
+ 	if (copied < ulen || UDP_SKB_CB(skb)->partial_cov) {
+-		if (udp_lib_checksum_complete(skb))
++		checksum_valid = !udp_lib_checksum_complete(skb);
++		if (!checksum_valid)
+ 			goto csum_copy_err;
+ 	}
+ 
+-	if (skb_csum_unnecessary(skb))
++	if (checksum_valid || skb_csum_unnecessary(skb))
+ 		err = skb_copy_datagram_iovec(skb, sizeof(struct udphdr),
+ 					      msg->msg_iov, copied);
+ 	else {
+-		err = skb_copy_and_csum_datagram_iovec(skb, sizeof(struct udphdr), msg->msg_iov);
++		err = skb_copy_and_csum_datagram_iovec(skb, sizeof(struct udphdr),
++						       msg->msg_iov, copied);
+ 		if (err == -EINVAL)
+ 			goto csum_copy_err;
+ 	}
+@@ -461,7 +461,7 @@ try_again:
+ 				ipv6_iface_scope_id(&sin6->sin6_addr,
+ 						    IP6CB(skb)->iif);
+ 		}
+-
++		*addr_len = sizeof(*sin6);
+ 	}
+ 	if (is_udp4) {
+ 		if (inet->cmsg_flags)
+@@ -1018,6 +1018,7 @@ int udpv6_sendmsg(struct kiocb *iocb, st
+ 	struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *) msg->msg_name;
+ 	struct in6_addr *daddr, *final_p, final;
+ 	struct ipv6_txoptions *opt = NULL;
++	struct ipv6_txoptions *opt_to_free = NULL;
+ 	struct ip6_flowlabel *flowlabel = NULL;
+ 	struct flowi6 fl6;
+ 	struct dst_entry *dst;
+@@ -1172,8 +1173,10 @@ do_udp_sendmsg:
+ 			opt = NULL;
+ 		connected = 0;
+ 	}
+-	if (opt == NULL)
+-		opt = np->opt;
++	if (!opt) {
++		opt = txopt_get(np);
++		opt_to_free = opt;
++	}
+ 	if (flowlabel)
+ 		opt = fl6_merge_options(&opt_space, flowlabel, opt);
+ 	opt = ipv6_fixup_options(&opt_space, opt);
+@@ -1274,6 +1277,7 @@ do_append_data:
+ out:
+ 	dst_release(dst);
+ 	fl6_sock_release(flowlabel);
++	txopt_put(opt_to_free);
+ 	if (!err)
+ 		return len;
+ 	/*
+diff -duprN mm/net/ipx/af_ipx.c n/net/ipx/af_ipx.c
+--- mm/net/ipx/af_ipx.c	2016-09-20 17:40:12.000000000 +0530
++++ n/net/ipx/af_ipx.c	2017-03-31 10:42:44.000000000 +0530
+@@ -1823,8 +1823,6 @@ static int ipx_recvmsg(struct kiocb *ioc
+ 	if (skb->tstamp.tv64)
+ 		sk->sk_stamp = skb->tstamp;
+ 
+-	msg->msg_namelen = sizeof(*sipx);
+-
+ 	if (sipx) {
+ 		sipx->sipx_family	= AF_IPX;
+ 		sipx->sipx_port		= ipx->ipx_source.sock;
+@@ -1832,6 +1830,7 @@ static int ipx_recvmsg(struct kiocb *ioc
+ 		sipx->sipx_network	= IPX_SKB_CB(skb)->ipx_source_net;
+ 		sipx->sipx_type 	= ipx->ipx_type;
+ 		sipx->sipx_zero		= 0;
++		msg->msg_namelen	= sizeof(*sipx);
+ 	}
+ 	rc = copied;
+ 
+diff -duprN mm/net/irda/af_irda.c n/net/irda/af_irda.c
+--- mm/net/irda/af_irda.c	2016-09-20 17:40:12.000000000 +0530
++++ n/net/irda/af_irda.c	2017-03-31 10:42:44.000000000 +0530
+@@ -1388,8 +1388,6 @@ static int irda_recvmsg_dgram(struct kio
+ 
+ 	IRDA_DEBUG(4, "%s()\n", __func__);
+ 
+-	msg->msg_namelen = 0;
+-
+ 	skb = skb_recv_datagram(sk, flags & ~MSG_DONTWAIT,
+ 				flags & MSG_DONTWAIT, &err);
+ 	if (!skb)
+@@ -1454,8 +1452,6 @@ static int irda_recvmsg_stream(struct ki
+ 	target = sock_rcvlowat(sk, flags & MSG_WAITALL, size);
+ 	timeo = sock_rcvtimeo(sk, noblock);
+ 
+-	msg->msg_namelen = 0;
+-
+ 	do {
+ 		int chunk;
+ 		struct sk_buff *skb = skb_dequeue(&sk->sk_receive_queue);
+diff -duprN mm/net/iucv/af_iucv.c n/net/iucv/af_iucv.c
+--- mm/net/iucv/af_iucv.c	2016-09-20 17:40:12.000000000 +0530
++++ n/net/iucv/af_iucv.c	2017-03-31 10:42:44.000000000 +0530
+@@ -1324,8 +1324,6 @@ static int iucv_sock_recvmsg(struct kioc
+ 	int err = 0;
+ 	u32 offset;
+ 
+-	msg->msg_namelen = 0;
+-
+ 	if ((sk->sk_state == IUCV_DISCONN) &&
+ 	    skb_queue_empty(&iucv->backlog_skb_q) &&
+ 	    skb_queue_empty(&sk->sk_receive_queue) &&
+diff -duprN mm/net/key/af_key.c n/net/key/af_key.c
+--- mm/net/key/af_key.c	2016-09-20 17:40:12.000000000 +0530
++++ n/net/key/af_key.c	2017-03-31 10:42:44.000000000 +0530
+@@ -3623,7 +3623,6 @@ static int pfkey_recvmsg(struct kiocb *k
+ 	if (flags & ~(MSG_PEEK|MSG_DONTWAIT|MSG_TRUNC|MSG_CMSG_COMPAT))
+ 		goto out;
+ 
+-	msg->msg_namelen = 0;
+ 	skb = skb_recv_datagram(sk, flags, flags & MSG_DONTWAIT, &err);
+ 	if (skb == NULL)
+ 		goto out;
+diff -duprN mm/net/l2tp/l2tp_ip.c n/net/l2tp/l2tp_ip.c
+--- mm/net/l2tp/l2tp_ip.c	2016-09-20 17:40:12.000000000 +0530
++++ n/net/l2tp/l2tp_ip.c	2017-03-31 10:42:44.000000000 +0530
+@@ -518,9 +518,6 @@ static int l2tp_ip_recvmsg(struct kiocb
+ 	if (flags & MSG_OOB)
+ 		goto out;
+ 
+-	if (addr_len)
+-		*addr_len = sizeof(*sin);
+-
+ 	skb = skb_recv_datagram(sk, flags, noblock, &err);
+ 	if (!skb)
+ 		goto out;
+@@ -543,6 +540,7 @@ static int l2tp_ip_recvmsg(struct kiocb
+ 		sin->sin_addr.s_addr = ip_hdr(skb)->saddr;
+ 		sin->sin_port = 0;
+ 		memset(&sin->sin_zero, 0, sizeof(sin->sin_zero));
++		*addr_len = sizeof(*sin);
+ 	}
+ 	if (inet->cmsg_flags)
+ 		ip_cmsg_recv(msg, skb);
+diff -duprN mm/net/l2tp/l2tp_ip6.c n/net/l2tp/l2tp_ip6.c
+--- mm/net/l2tp/l2tp_ip6.c	2016-09-20 17:40:12.000000000 +0530
++++ n/net/l2tp/l2tp_ip6.c	2017-03-31 10:42:44.000000000 +0530
+@@ -485,6 +485,7 @@ static int l2tp_ip6_sendmsg(struct kiocb
+ 		(struct sockaddr_l2tpip6 *) msg->msg_name;
+ 	struct in6_addr *daddr, *final_p, final;
+ 	struct ipv6_pinfo *np = inet6_sk(sk);
++	struct ipv6_txoptions *opt_to_free = NULL;
+ 	struct ipv6_txoptions *opt = NULL;
+ 	struct ip6_flowlabel *flowlabel = NULL;
+ 	struct dst_entry *dst = NULL;
+@@ -575,8 +576,10 @@ static int l2tp_ip6_sendmsg(struct kiocb
+ 			opt = NULL;
+ 	}
+ 
+-	if (opt == NULL)
+-		opt = np->opt;
++	if (!opt) {
++		opt = txopt_get(np);
++		opt_to_free = opt;
++	}
+ 	if (flowlabel)
+ 		opt = fl6_merge_options(&opt_space, flowlabel, opt);
+ 	opt = ipv6_fixup_options(&opt_space, opt);
+@@ -637,6 +640,7 @@ done:
+ 	dst_release(dst);
+ out:
+ 	fl6_sock_release(flowlabel);
++	txopt_put(opt_to_free);
+ 
+ 	return err < 0 ? err : len;
+ 
+diff -duprN mm/net/l2tp/l2tp_ppp.c n/net/l2tp/l2tp_ppp.c
+--- mm/net/l2tp/l2tp_ppp.c	2016-09-20 17:40:12.000000000 +0530
++++ n/net/l2tp/l2tp_ppp.c	2017-03-31 10:42:44.000000000 +0530
+@@ -197,8 +197,6 @@ static int pppol2tp_recvmsg(struct kiocb
+ 	if (sk->sk_state & PPPOX_BOUND)
+ 		goto end;
+ 
+-	msg->msg_namelen = 0;
+-
+ 	err = 0;
+ 	skb = skb_recv_datagram(sk, flags & ~MSG_DONTWAIT,
+ 				flags & MSG_DONTWAIT, &err);
+diff -duprN mm/net/llc/af_llc.c n/net/llc/af_llc.c
+--- mm/net/llc/af_llc.c	2016-09-20 17:40:13.000000000 +0530
++++ n/net/llc/af_llc.c	2017-03-31 10:42:44.000000000 +0530
+@@ -626,6 +626,7 @@ static void llc_cmsg_rcv(struct msghdr *
+ 	if (llc->cmsg_flags & LLC_CMSG_PKTINFO) {
+ 		struct llc_pktinfo info;
+ 
++		memset(&info, 0, sizeof(info));
+ 		info.lpi_ifindex = llc_sk(skb->sk)->dev->ifindex;
+ 		llc_pdu_decode_dsap(skb, &info.lpi_sap);
+ 		llc_pdu_decode_da(skb, info.lpi_mac);
+@@ -720,8 +721,6 @@ static int llc_ui_recvmsg(struct kiocb *
+ 	int target;	/* Read at least this many bytes */
+ 	long timeo;
+ 
+-	msg->msg_namelen = 0;
+-
+ 	lock_sock(sk);
+ 	copied = -ENOTCONN;
+ 	if (unlikely(sk->sk_type == SOCK_STREAM && sk->sk_state == TCP_LISTEN))
+diff -duprN mm/net/netfilter/interceptor/kernelspd_hooks.c n/net/netfilter/interceptor/kernelspd_hooks.c
+--- mm/net/netfilter/interceptor/kernelspd_hooks.c	2016-09-20 17:40:11.000000000 +0530
++++ n/net/netfilter/interceptor/kernelspd_hooks.c	2017-03-31 10:42:45.000000000 +0530
+@@ -296,7 +296,7 @@ hook_ipv4(
+         non_initial_fragment = (((ntohs(iph->frag_off)) & 0x1fff) != 0);
+         udph = skb_header_pointer(skb, (iph->ihl << 2), 4, ports);
+ 
+-        if (skb->sk != NULL)
++        if (skb->sk != NULL && hooknum == NF_INET_LOCAL_OUT)
+         {
+             packet_kuid = sock_i_uid(skb->sk);
+         }
+@@ -435,7 +435,7 @@ hook_ipv6(
+ 
+         fields.ip_protocol = nexthdr;
+ 
+-        if (skb->sk != NULL)
++        if (skb->sk != NULL && hooknum == NF_INET_LOCAL_OUT)
+         {
+             packet_kuid = sock_i_uid(skb->sk);
+         }
+diff -duprN mm/net/netfilter/nf_conntrack_core.c n/net/netfilter/nf_conntrack_core.c
+--- mm/net/netfilter/nf_conntrack_core.c	2016-09-20 17:40:18.000000000 +0530
++++ n/net/netfilter/nf_conntrack_core.c	2017-03-31 10:42:45.000000000 +0530
+@@ -188,7 +188,7 @@ EXPORT_SYMBOL_GPL(nf_ct_invert_tuple);
+ static void
+ clean_from_lists(struct nf_conn *ct)
+ {
+-	pr_debug("clean_from_lists(%p)\n", ct);
++	pr_debug("clean_from_lists(%pK)\n", ct);
+ 	hlist_nulls_del_rcu(&ct->tuplehash[IP_CT_DIR_ORIGINAL].hnnode);
+ 	hlist_nulls_del_rcu(&ct->tuplehash[IP_CT_DIR_REPLY].hnnode);
+ 
+@@ -203,7 +203,7 @@ destroy_conntrack(struct nf_conntrack *n
+ 	struct net *net = nf_ct_net(ct);
+ 	struct nf_conntrack_l4proto *l4proto;
+ 
+-	pr_debug("destroy_conntrack(%p)\n", ct);
++	pr_debug("destroy_conntrack(%pK)\n", ct);
+ 	NF_CT_ASSERT(atomic_read(&nfct->use) == 0);
+ 	NF_CT_ASSERT(!timer_pending(&ct->timeout));
+ 
+@@ -234,7 +234,7 @@ destroy_conntrack(struct nf_conntrack *n
+ 	if (ct->master)
+ 		nf_ct_put(ct->master);
+ 
+-	pr_debug("destroy_conntrack: returning ct=%p to slab\n", ct);
++	pr_debug("destroy_conntrack: returning ct=%pK to slab\n", ct);
+ 	nf_conntrack_free(ct);
+ }
+ 
+@@ -496,7 +496,7 @@ __nf_conntrack_confirm(struct sk_buff *s
+ 	/* No external references means no one else could have
+ 	   confirmed us. */
+ 	NF_CT_ASSERT(!nf_ct_is_confirmed(ct));
+-	pr_debug("Confirming conntrack %p\n", ct);
++	pr_debug("Confirming conntrack %pK\n", ct);
+ 
+ 	spin_lock_bh(&nf_conntrack_lock);
+ 
+@@ -823,7 +823,7 @@ init_conntrack(struct net *net, struct n
+ 	spin_lock_bh(&nf_conntrack_lock);
+ 	exp = nf_ct_find_expectation(net, zone, tuple);
+ 	if (exp) {
+-		pr_debug("conntrack: expectation arrives ct=%p exp=%p\n",
++		pr_debug("conntrack: expectation arrives ct=%pK exp=%pK\n",
+ 			 ct, exp);
+ 		/* Welcome, Mr. Bond.  We've been expecting you... */
+ 		__set_bit(IPS_EXPECTED_BIT, &ct->status);
+@@ -909,14 +909,14 @@ resolve_normal_ct(struct net *net, struc
+ 	} else {
+ 		/* Once we've had two way comms, always ESTABLISHED. */
+ 		if (test_bit(IPS_SEEN_REPLY_BIT, &ct->status)) {
+-			pr_debug("nf_conntrack_in: normal packet for %p\n", ct);
++			pr_debug("nf_conntrack_in: normal packet for %pK\n", ct);
+ 			*ctinfo = IP_CT_ESTABLISHED;
+ 		} else if (test_bit(IPS_EXPECTED_BIT, &ct->status)) {
+-			pr_debug("nf_conntrack_in: related packet for %p\n",
++			pr_debug("nf_conntrack_in: related packet for %pK\n",
+ 				 ct);
+ 			*ctinfo = IP_CT_RELATED;
+ 		} else {
+-			pr_debug("nf_conntrack_in: new packet for %p\n", ct);
++			pr_debug("nf_conntrack_in: new packet for %pK\n", ct);
+ 			*ctinfo = IP_CT_NEW;
+ 		}
+ 		*set_reply = 0;
+@@ -1058,7 +1058,7 @@ void nf_conntrack_alter_reply(struct nf_
+ 	/* Should be unconfirmed, so not in hash table yet */
+ 	NF_CT_ASSERT(!nf_ct_is_confirmed(ct));
+ 
+-	pr_debug("Altering reply tuple of %p to ", ct);
++	pr_debug("Altering reply tuple of %pK to ", ct);
+ 	nf_ct_dump_tuple(newreply);
+ 
+ 	ct->tuplehash[IP_CT_DIR_REPLY].tuple = *newreply;
+@@ -1628,7 +1628,7 @@ int nf_conntrack_init_net(struct net *ne
+ 		goto err_stat;
+ 	}
+ 
+-	net->ct.slabname = kasprintf(GFP_KERNEL, "nf_conntrack_%p", net);
++	net->ct.slabname = kasprintf(GFP_KERNEL, "nf_conntrack_%pK", net);
+ 	if (!net->ct.slabname) {
+ 		ret = -ENOMEM;
+ 		goto err_slabname;
+diff -duprN mm/net/netfilter/xt_qtaguid.c n/net/netfilter/xt_qtaguid.c
+--- mm/net/netfilter/xt_qtaguid.c	2016-09-20 17:40:21.000000000 +0530
++++ n/net/netfilter/xt_qtaguid.c	2017-03-31 10:42:45.000000000 +0530
+@@ -1932,7 +1932,7 @@ static int qtaguid_ctrl_proc_show(struct
+ 			);
+ 		f_count = atomic_long_read(
+ 			&sock_tag_entry->socket->file->f_count);
+-		seq_printf(m, "sock=%p tag=0x%llx (uid=%u) pid=%u "
++		seq_printf(m, "sock=%pK tag=0x%llx (uid=%u) pid=%u "
+ 			   "f_count=%lu\n",
+ 			   sock_tag_entry->sk,
+ 			   sock_tag_entry->tag, uid,
+@@ -2528,7 +2528,7 @@ static int pp_stats_line(struct seq_file
+ 	uid_t stat_uid = get_uid_from_tag(tag);
+ 	struct proc_print_info *ppi = m->private;
+ 	/* Detailed tags are not available to everybody */
+-	if (get_atag_from_tag(tag) && !can_read_other_uid_stats(stat_uid)) {
++	if (!can_read_other_uid_stats(stat_uid)) {
+ 		CT_DEBUG("qtaguid: stats line: "
+ 			 "%s 0x%llx %u: insufficient priv "
+ 			 "from pid=%u tgid=%u uid=%u stats.gid=%u\n",
+diff -duprN mm/net/netlink/af_netlink.c n/net/netlink/af_netlink.c
+--- mm/net/netlink/af_netlink.c	2016-09-20 17:40:22.000000000 +0530
++++ n/net/netlink/af_netlink.c	2017-03-31 10:42:45.000000000 +0530
+@@ -2168,8 +2168,6 @@ static int netlink_recvmsg(struct kiocb
+ 	}
+ #endif
+ 
+-	msg->msg_namelen = 0;
+-
+ 	copied = data_skb->len;
+ 	if (len < copied) {
+ 		msg->msg_flags |= MSG_TRUNC;
+diff -duprN mm/net/netrom/af_netrom.c n/net/netrom/af_netrom.c
+--- mm/net/netrom/af_netrom.c	2016-09-20 17:40:22.000000000 +0530
++++ n/net/netrom/af_netrom.c	2017-03-31 10:42:45.000000000 +0530
+@@ -1179,10 +1179,9 @@ static int nr_recvmsg(struct kiocb *iocb
+ 		sax->sax25_family = AF_NETROM;
+ 		skb_copy_from_linear_data_offset(skb, 7, sax->sax25_call.ax25_call,
+ 			      AX25_ADDR_LEN);
++		msg->msg_namelen = sizeof(*sax);
+ 	}
+ 
+-	msg->msg_namelen = sizeof(*sax);
+-
+ 	skb_free_datagram(sk, skb);
+ 
+ 	release_sock(sk);
+diff -duprN mm/net/nfc/llcp_sock.c n/net/nfc/llcp_sock.c
+--- mm/net/nfc/llcp_sock.c	2016-09-20 17:40:22.000000000 +0530
++++ n/net/nfc/llcp_sock.c	2017-03-31 10:42:45.000000000 +0530
+@@ -798,8 +798,6 @@ static int llcp_sock_recvmsg(struct kioc
+ 
+ 	pr_debug("%p %zu\n", sk, len);
+ 
+-	msg->msg_namelen = 0;
+-
+ 	lock_sock(sk);
+ 
+ 	if (sk->sk_state == LLCP_CLOSED &&
+diff -duprN mm/net/nfc/rawsock.c n/net/nfc/rawsock.c
+--- mm/net/nfc/rawsock.c	2016-09-20 17:40:22.000000000 +0530
++++ n/net/nfc/rawsock.c	2017-03-31 10:42:45.000000000 +0530
+@@ -241,8 +241,6 @@ static int rawsock_recvmsg(struct kiocb
+ 	if (!skb)
+ 		return rc;
+ 
+-	msg->msg_namelen = 0;
+-
+ 	copied = skb->len;
+ 	if (len < copied) {
+ 		msg->msg_flags |= MSG_TRUNC;
+diff -duprN mm/net/packet/af_packet.c n/net/packet/af_packet.c
+--- mm/net/packet/af_packet.c	2016-09-20 17:40:23.000000000 +0530
++++ n/net/packet/af_packet.c	2017-03-31 10:42:45.000000000 +0530
+@@ -2694,7 +2694,6 @@ static int packet_recvmsg(struct kiocb *
+ 	struct sock *sk = sock->sk;
+ 	struct sk_buff *skb;
+ 	int copied, err;
+-	struct sockaddr_ll *sll;
+ 	int vnet_hdr_len = 0;
+ 
+ 	err = -EINVAL;
+@@ -2777,21 +2776,10 @@ static int packet_recvmsg(struct kiocb *
+ 			goto out_free;
+ 	}
+ 
+-	/*
+-	 *	If the address length field is there to be filled in, we fill
+-	 *	it in now.
+-	 */
+-
+-	sll = &PACKET_SKB_CB(skb)->sa.ll;
+-	if (sock->type == SOCK_PACKET)
+-		msg->msg_namelen = sizeof(struct sockaddr_pkt);
+-	else
+-		msg->msg_namelen = sll->sll_halen + offsetof(struct sockaddr_ll, sll_addr);
+-
+-	/*
+-	 *	You lose any data beyond the buffer you gave. If it worries a
+-	 *	user program they can ask the device for its MTU anyway.
+-	 */
++	/* You lose any data beyond the buffer you gave. If it worries
++	 * a user program they can ask the device for its MTU
++	 * anyway.
++ 	 */
+ 
+ 	copied = skb->len;
+ 	if (copied > len) {
+@@ -2805,9 +2793,20 @@ static int packet_recvmsg(struct kiocb *
+ 
+ 	sock_recv_ts_and_drops(msg, sk, skb);
+ 
+-	if (msg->msg_name)
++	if (msg->msg_name) {
++		/* If the address length field is there to be filled
++		 * in, we fill it in now.
++		 */
++		if (sock->type == SOCK_PACKET) {
++			msg->msg_namelen = sizeof(struct sockaddr_pkt);
++		} else {
++			struct sockaddr_ll *sll = &PACKET_SKB_CB(skb)->sa.ll;
++			msg->msg_namelen = sll->sll_halen +
++				offsetof(struct sockaddr_ll, sll_addr);
++		}
+ 		memcpy(msg->msg_name, &PACKET_SKB_CB(skb)->sa,
+ 		       msg->msg_namelen);
++	}
+ 
+ 	if (pkt_sk(sk)->auxdata) {
+ 		struct tpacket_auxdata aux;
+@@ -3110,19 +3109,25 @@ packet_setsockopt(struct socket *sock, i
+ 
+ 		if (optlen != sizeof(val))
+ 			return -EINVAL;
+-		if (po->rx_ring.pg_vec || po->tx_ring.pg_vec)
+-			return -EBUSY;
+ 		if (copy_from_user(&val, optval, sizeof(val)))
+ 			return -EFAULT;
+ 		switch (val) {
+ 		case TPACKET_V1:
+ 		case TPACKET_V2:
+ 		case TPACKET_V3:
+-			po->tp_version = val;
+-			return 0;
++			break;
+ 		default:
+ 			return -EINVAL;
+ 		}
++		lock_sock(sk);
++		if (po->rx_ring.pg_vec || po->tx_ring.pg_vec) {
++			ret = -EBUSY;
++		} else {
++			po->tp_version = val;
++			ret = 0;
++		}
++		release_sock(sk);
++		return ret;
+ 	}
+ 	case PACKET_RESERVE:
+ 	{
+@@ -3574,6 +3579,7 @@ static int packet_set_ring(struct sock *
+ 	/* Added to avoid minimal code churn */
+ 	struct tpacket_req *req = &req_u->req;
+ 
++	lock_sock(sk);
+ 	/* Opening a Tx-ring is NOT supported in TPACKET_V3 */
+ 	if (!closing && tx_ring && (po->tp_version > TPACKET_V2)) {
+ 		WARN(1, "Tx-ring is not supported.\n");
+@@ -3651,7 +3657,6 @@ static int packet_set_ring(struct sock *
+ 			goto out;
+ 	}
+ 
+-	lock_sock(sk);
+ 
+ 	/* Detach socket from network */
+ 	spin_lock(&po->bind_lock);
+@@ -3700,11 +3705,11 @@ static int packet_set_ring(struct sock *
+ 		if (!tx_ring)
+ 			prb_shutdown_retire_blk_timer(po, tx_ring, rb_queue);
+ 	}
+-	release_sock(sk);
+ 
+ 	if (pg_vec)
+ 		free_pg_vec(pg_vec, order, req->tp_block_nr);
+ out:
++	release_sock(sk);
+ 	return err;
+ }
+ 
+diff -duprN mm/net/phonet/datagram.c n/net/phonet/datagram.c
+--- mm/net/phonet/datagram.c	2016-09-20 17:40:23.000000000 +0530
++++ n/net/phonet/datagram.c	2017-03-31 10:42:45.000000000 +0530
+@@ -139,9 +139,6 @@ static int pn_recvmsg(struct kiocb *iocb
+ 			MSG_CMSG_COMPAT))
+ 		goto out_nofree;
+ 
+-	if (addr_len)
+-		*addr_len = sizeof(sa);
+-
+ 	skb = skb_recv_datagram(sk, flags, noblock, &rval);
+ 	if (skb == NULL)
+ 		goto out_nofree;
+@@ -162,8 +159,10 @@ static int pn_recvmsg(struct kiocb *iocb
+ 
+ 	rval = (flags & MSG_TRUNC) ? skb->len : copylen;
+ 
+-	if (msg->msg_name != NULL)
+-		memcpy(msg->msg_name, &sa, sizeof(struct sockaddr_pn));
++	if (msg->msg_name != NULL) {
++		memcpy(msg->msg_name, &sa, sizeof(sa));
++		*addr_len = sizeof(sa);
++	}
+ 
+ out:
+ 	skb_free_datagram(sk, skb);
+diff -duprN mm/net/rds/recv.c n/net/rds/recv.c
+--- mm/net/rds/recv.c	2016-09-20 17:40:23.000000000 +0530
++++ n/net/rds/recv.c	2017-03-31 10:42:45.000000000 +0530
+@@ -410,8 +410,6 @@ int rds_recvmsg(struct kiocb *iocb, stru
+ 
+ 	rdsdebug("size %zu flags 0x%x timeo %ld\n", size, msg_flags, timeo);
+ 
+-	msg->msg_namelen = 0;
+-
+ 	if (msg_flags & MSG_OOB)
+ 		goto out;
+ 
+@@ -546,5 +544,7 @@ void rds_inc_info_copy(struct rds_incomi
+ 		minfo.fport = inc->i_hdr.h_dport;
+ 	}
+ 
++	minfo.flags = 0;
++
+ 	rds_info_copy(iter, &minfo, sizeof(minfo));
+ }
+diff -duprN mm/net/rose/af_rose.c n/net/rose/af_rose.c
+--- mm/net/rose/af_rose.c	2016-09-20 17:40:23.000000000 +0530
++++ n/net/rose/af_rose.c	2017-03-31 10:42:46.000000000 +0530
+@@ -1216,7 +1216,6 @@ static int rose_recvmsg(struct kiocb *io
+ {
+ 	struct sock *sk = sock->sk;
+ 	struct rose_sock *rose = rose_sk(sk);
+-	struct sockaddr_rose *srose = (struct sockaddr_rose *)msg->msg_name;
+ 	size_t copied;
+ 	unsigned char *asmptr;
+ 	struct sk_buff *skb;
+@@ -1252,8 +1251,11 @@ static int rose_recvmsg(struct kiocb *io
+ 
+ 	skb_copy_datagram_iovec(skb, 0, msg->msg_iov, copied);
+ 
+-	if (srose != NULL) {
+-		memset(srose, 0, msg->msg_namelen);
++	if (msg->msg_name) {
++		struct sockaddr_rose *srose;
++
++		memset(msg->msg_name, 0, sizeof(struct full_sockaddr_rose));
++		srose = msg->msg_name;
+ 		srose->srose_family = AF_ROSE;
+ 		srose->srose_addr   = rose->dest_addr;
+ 		srose->srose_call   = rose->dest_call;
+diff -duprN mm/net/rxrpc/ar-recvmsg.c n/net/rxrpc/ar-recvmsg.c
+--- mm/net/rxrpc/ar-recvmsg.c	2016-09-20 17:40:25.000000000 +0530
++++ n/net/rxrpc/ar-recvmsg.c	2017-03-31 10:42:46.000000000 +0530
+@@ -143,10 +143,13 @@ int rxrpc_recvmsg(struct kiocb *iocb, st
+ 
+ 		/* copy the peer address and timestamp */
+ 		if (!continue_call) {
+-			if (msg->msg_name && msg->msg_namelen > 0)
++			if (msg->msg_name) {
++				size_t len =
++					sizeof(call->conn->trans->peer->srx);
+ 				memcpy(msg->msg_name,
+-				       &call->conn->trans->peer->srx,
+-				       sizeof(call->conn->trans->peer->srx));
++				       &call->conn->trans->peer->srx, len);
++				msg->msg_namelen = len;
++			}
+ 			sock_recv_ts_and_drops(msg, &rx->sk, skb);
+ 		}
+ 
+@@ -182,7 +185,8 @@ int rxrpc_recvmsg(struct kiocb *iocb, st
+ 						      msg->msg_iov, copy);
+ 		} else {
+ 			ret = skb_copy_and_csum_datagram_iovec(skb, offset,
+-							       msg->msg_iov);
++							       msg->msg_iov,
++							       copy);
+ 			if (ret == -EINVAL)
+ 				goto csum_copy_error;
+ 		}
+diff -duprN mm/net/sched/act_mirred.c n/net/sched/act_mirred.c
+--- mm/net/sched/act_mirred.c	2016-09-20 17:40:26.000000000 +0530
++++ n/net/sched/act_mirred.c	2017-03-31 10:42:46.000000000 +0530
+@@ -84,6 +84,7 @@ static int tcf_mirred_init(struct net *n
+ 	switch (parm->eaction) {
+ 	case TCA_EGRESS_MIRROR:
+ 	case TCA_EGRESS_REDIR:
++	case TCA_INGRESS_REDIR:
+ 		break;
+ 	default:
+ 		return -EINVAL;
+@@ -180,24 +181,38 @@ static int tcf_mirred(struct sk_buff *sk
+ 		goto out;
+ 	}
+ 
+-	at = G_TC_AT(skb->tc_verd);
+ 	skb2 = skb_act_clone(skb, GFP_ATOMIC, m->tcf_action);
+ 	if (skb2 == NULL)
+ 		goto out;
+ 
+-	if (!(at & AT_EGRESS)) {
+-		if (m->tcfm_ok_push)
+-			skb_push(skb2, skb2->dev->hard_header_len);
+-	}
+-
+-	/* mirror is always swallowed */
+-	if (m->tcfm_eaction != TCA_EGRESS_MIRROR)
+-		skb2->tc_verd = SET_TC_FROM(skb2->tc_verd, at);
++        if (m->tcfm_eaction == TCA_INGRESS_REDIR) {
++                /* Let's _hope_ the devices are of similar type.
++                 * This is rather dangerous; with changed skb_iif, we
++                 * will not know the real input device, but perhaps
++                 * that's the whole point of doing the ingress
++                 * redirect/mirror in the first place?  (Note: This
++                 * can lead to bad things if two devices ingress
++                 * redirect at each other. Don't do that.)*/
++                skb2->dev = dev;
++                skb2->skb_iif = skb2->dev->ifindex;
++                skb2->pkt_type = PACKET_HOST;
++                netif_rx(skb2);
++        } else {
++                at = G_TC_AT(skb->tc_verd);
++                if (!(at & AT_EGRESS)) {
++                        if (m->tcfm_ok_push) {
++			        skb_push(skb2, skb2->dev->hard_header_len);
++                        }
++                }
+ 
+-	skb2->skb_iif = skb->dev->ifindex;
+-	skb2->dev = dev;
+-	err = dev_queue_xmit(skb2);
++                /* mirror is always swallowed */
++                if (m->tcfm_eaction != TCA_EGRESS_MIRROR)
++		        skb2->tc_verd = SET_TC_FROM(skb2->tc_verd, at);
+ 
++                skb2->skb_iif = skb->dev->ifindex;
++                skb2->dev = dev;
++                err = dev_queue_xmit(skb2);
++        }
+ out:
+ 	if (err) {
+ 		m->tcf_qstats.overlimits++;
+diff -duprN mm/net/sched/sch_api.c n/net/sched/sch_api.c
+--- mm/net/sched/sch_api.c	2016-09-20 17:40:27.000000000 +0530
++++ n/net/sched/sch_api.c	2017-03-31 10:42:46.000000000 +0530
+@@ -1037,6 +1037,35 @@ static int tc_get_qdisc(struct sk_buff *
+ }
+ 
+ /*
++ * enable/disable flow on qdisc.
++ */
++void
++tc_qdisc_flow_control(struct net_device *dev, u32 tcm_handle, int enable_flow)
++{
++	struct Qdisc *q;
++	struct __qdisc_change_req {
++		struct nlattr attr;
++		struct tc_prio_qopt data;
++	} req =	{
++		.attr = {sizeof(struct __qdisc_change_req), TCA_OPTIONS},
++		.data = {3, {1, 2, 2, 2, 1, 2, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1}, 1}
++		};
++
++	/* override flow bit */
++	req.data.enable_flow = enable_flow;
++
++	/* look up using tcm handle */
++	q = qdisc_lookup(dev, tcm_handle);
++
++	/* call registered change function */
++	if (q) {
++		if (q->ops->change(q, &(req.attr)) != 0)
++			pr_err("tc_qdisc_flow_control: qdisc change failed");
++	}
++}
++EXPORT_SYMBOL(tc_qdisc_flow_control);
++
++/*
+  * Create/change qdisc.
+  */
+ 
+diff -duprN mm/net/sched/sch_prio.c n/net/sched/sch_prio.c
+--- mm/net/sched/sch_prio.c	2016-09-20 17:40:27.000000000 +0530
++++ n/net/sched/sch_prio.c	2017-03-31 10:42:46.000000000 +0530
+@@ -18,6 +18,7 @@
+ #include <linux/string.h>
+ #include <linux/errno.h>
+ #include <linux/skbuff.h>
++#include <linux/netdevice.h>
+ #include <net/netlink.h>
+ #include <net/pkt_sched.h>
+ 
+@@ -27,6 +28,7 @@ struct prio_sched_data {
+ 	struct tcf_proto *filter_list;
+ 	u8  prio2band[TC_PRIO_MAX+1];
+ 	struct Qdisc *queues[TCQ_PRIO_BANDS];
++	u8 enable_flow;
+ };
+ 
+ 
+@@ -95,7 +97,8 @@ static struct sk_buff *prio_peek(struct
+ {
+ 	struct prio_sched_data *q = qdisc_priv(sch);
+ 	int prio;
+-
++	if (!q->enable_flow)
++		return NULL;
+ 	for (prio = 0; prio < q->bands; prio++) {
+ 		struct Qdisc *qdisc = q->queues[prio];
+ 		struct sk_buff *skb = qdisc->ops->peek(qdisc);
+@@ -109,6 +112,8 @@ static struct sk_buff *prio_dequeue(stru
+ {
+ 	struct prio_sched_data *q = qdisc_priv(sch);
+ 	int prio;
++	if (!q->enable_flow)
++		return NULL;
+ 
+ 	for (prio = 0; prio < q->bands; prio++) {
+ 		struct Qdisc *qdisc = q->queues[prio];
+@@ -150,6 +155,7 @@ prio_reset(struct Qdisc *sch)
+ 	for (prio = 0; prio < q->bands; prio++)
+ 		qdisc_reset(q->queues[prio]);
+ 	sch->q.qlen = 0;
++	q->enable_flow = 1;
+ }
+ 
+ static void
+@@ -168,6 +174,7 @@ static int prio_tune(struct Qdisc *sch,
+ 	struct prio_sched_data *q = qdisc_priv(sch);
+ 	struct tc_prio_qopt *qopt;
+ 	int i;
++	int flow_change = 0;
+ 
+ 	if (nla_len(opt) < sizeof(*qopt))
+ 		return -EINVAL;
+@@ -182,6 +189,10 @@ static int prio_tune(struct Qdisc *sch,
+ 	}
+ 
+ 	sch_tree_lock(sch);
++	if (q->enable_flow != qopt->enable_flow) {
++		q->enable_flow = qopt->enable_flow;
++		flow_change = 1;
++	}
+ 	q->bands = qopt->bands;
+ 	memcpy(q->prio2band, qopt->priomap, TC_PRIO_MAX+1);
+ 
+@@ -216,6 +227,12 @@ static int prio_tune(struct Qdisc *sch,
+ 			}
+ 		}
+ 	}
++	/* Schedule qdisc when flow re-enabled */
++	if (flow_change && q->enable_flow) {
++		if (!test_bit(__QDISC_STATE_DEACTIVATED,
++			      &sch->state))
++			__netif_schedule(qdisc_root(sch));
++	}
+ 	return 0;
+ }
+ 
+@@ -245,6 +262,7 @@ static int prio_dump(struct Qdisc *sch,
+ 	struct tc_prio_qopt opt;
+ 
+ 	opt.bands = q->bands;
++	opt.enable_flow = q->enable_flow;
+ 	memcpy(&opt.priomap, q->prio2band, TC_PRIO_MAX + 1);
+ 
+ 	if (nla_put(skb, TCA_OPTIONS, sizeof(opt), &opt))
+diff -duprN mm/net/sctp/sm_statefuns.c n/net/sctp/sm_statefuns.c
+--- mm/net/sctp/sm_statefuns.c	2016-09-20 17:40:23.000000000 +0530
++++ n/net/sctp/sm_statefuns.c	2017-03-31 10:42:46.000000000 +0530
+@@ -3412,6 +3412,12 @@ sctp_disposition_t sctp_sf_ootb(struct n
+ 		if (ntohs(ch->length) < sizeof(sctp_chunkhdr_t))
+ 			return sctp_sf_violation_chunklen(net, ep, asoc, type, arg,
+ 						  commands);
++						  
++		/* Report violation if chunk len overflows */
++		ch_end = ((__u8 *)ch) + WORD_ROUND(ntohs(ch->length));
++		if (ch_end > skb_tail_pointer(skb))
++			return sctp_sf_violation_chunklen(net, ep, asoc, type, arg,
++						  commands);
+ 
+ 		/* Now that we know we at least have a chunk header,
+ 		 * do things that are type appropriate.
+@@ -3444,12 +3450,6 @@ sctp_disposition_t sctp_sf_ootb(struct n
+ 			}
+ 		}
+ 
+-		/* Report violation if chunk len overflows */
+-		ch_end = ((__u8 *)ch) + WORD_ROUND(ntohs(ch->length));
+-		if (ch_end > skb_tail_pointer(skb))
+-			return sctp_sf_violation_chunklen(net, ep, asoc, type, arg,
+-						  commands);
+-
+ 		ch = (sctp_chunkhdr_t *) ch_end;
+ 	} while (ch_end < skb_tail_pointer(skb));
+ 
+diff -duprN mm/net/sctp/socket.c n/net/sctp/socket.c
+--- mm/net/sctp/socket.c	2016-09-20 17:40:28.000000000 +0530
++++ n/net/sctp/socket.c	2017-03-31 10:42:46.000000000 +0530
+@@ -6641,7 +6641,8 @@ static int sctp_wait_for_sndbuf(struct s
+ 		 */
+ 		sctp_release_sock(sk);
+ 		current_timeo = schedule_timeout(current_timeo);
+-		BUG_ON(sk != asoc->base.sk);
++		if (sk != asoc->base.sk)
++			goto do_error;
+ 		sctp_lock_sock(sk);
+ 
+ 		*timeo_p = current_timeo;
+diff -duprN mm/net/socket.c n/net/socket.c
+--- mm/net/socket.c	2016-09-20 17:40:28.000000000 +0530
++++ n/net/socket.c	2017-03-31 10:42:46.000000000 +0530
+@@ -1763,6 +1763,8 @@ SYSCALL_DEFINE6(sendto, int, fd, void __
+ 
+ 	if (len > INT_MAX)
+ 		len = INT_MAX;
++	if (unlikely(!access_ok(VERIFY_READ, buff, len)))
++		return -EFAULT;
+ 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
+ 	if (!sock)
+ 		goto out;
+@@ -1822,6 +1824,8 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void
+ 
+ 	if (size > INT_MAX)
+ 		size = INT_MAX;
++	if (unlikely(!access_ok(VERIFY_WRITE, ubuf, size)))
++		return -EFAULT;
+ 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
+ 	if (!sock)
+ 		goto out;
+@@ -1832,8 +1836,10 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void
+ 	msg.msg_iov = &iov;
+ 	iov.iov_len = size;
+ 	iov.iov_base = ubuf;
+-	msg.msg_name = (struct sockaddr *)&address;
+-	msg.msg_namelen = sizeof(address);
++	/* Save some cycles and don't copy the address if not needed */
++	msg.msg_name = addr ? (struct sockaddr *)&address : NULL;
++	/* We assume all kernel code knows the size of sockaddr_storage */
++	msg.msg_namelen = 0;
+ 	if (sock->file->f_flags & O_NONBLOCK)
+ 		flags |= MSG_DONTWAIT;
+ 	err = sock_recvmsg(sock, &msg, size, flags);
+@@ -2197,16 +2203,15 @@ static int ___sys_recvmsg(struct socket
+ 			goto out;
+ 	}
+ 
+-	/*
+-	 *      Save the user-mode address (verify_iovec will change the
+-	 *      kernel msghdr to use the kernel address space)
++	/* Save the user-mode address (verify_iovec will change the
++	 * kernel msghdr to use the kernel address space)
+ 	 */
+ 
+ 	uaddr = (__force void __user *)msg_sys->msg_name;
+ 	uaddr_len = COMPAT_NAMELEN(msg);
+-	if (MSG_CMSG_COMPAT & flags) {
++	if (MSG_CMSG_COMPAT & flags)
+ 		err = verify_compat_iovec(msg_sys, iov, &addr, VERIFY_WRITE);
+-	} else
++	else
+ 		err = verify_iovec(msg_sys, iov, &addr, VERIFY_WRITE);
+ 	if (err < 0)
+ 		goto out_freeiov;
+@@ -2215,6 +2220,9 @@ static int ___sys_recvmsg(struct socket
+ 	cmsg_ptr = (unsigned long)msg_sys->msg_control;
+ 	msg_sys->msg_flags = flags & (MSG_CMSG_CLOEXEC|MSG_CMSG_COMPAT);
+ 
++	/* We assume all kernel code knows the size of sockaddr_storage */
++	msg_sys->msg_namelen = 0;
++
+ 	if (sock->file->f_flags & O_NONBLOCK)
+ 		flags |= MSG_DONTWAIT;
+ 	err = (nosec ? sock_recvmsg_nosec : sock_recvmsg)(sock, msg_sys,
+@@ -2361,31 +2369,31 @@ int __sys_recvmmsg(int fd, struct mmsghd
+ 			break;
+ 	}
+ 
+-out_put:
+-	fput_light(sock->file, fput_needed);
+-
+ 	if (err == 0)
+-		return datagrams;
++		goto out_put;
+ 
+-	if (datagrams != 0) {
++	if (datagrams == 0) {
++		datagrams = err;
++		goto out_put;
++	}
++
++	/*
++	 * We may return less entries than requested (vlen) if the
++	 * sock is non block and there aren't enough datagrams...
++	 */
++	if (err != -EAGAIN) {
+ 		/*
+-		 * We may return less entries than requested (vlen) if the
+-		 * sock is non block and there aren't enough datagrams...
++		 * ... or  if recvmsg returns an error after we
++		 * received some datagrams, where we record the
++		 * error to return on the next call or if the
++		 * app asks about it using getsockopt(SO_ERROR).
+ 		 */
+-		if (err != -EAGAIN) {
+-			/*
+-			 * ... or  if recvmsg returns an error after we
+-			 * received some datagrams, where we record the
+-			 * error to return on the next call or if the
+-			 * app asks about it using getsockopt(SO_ERROR).
+-			 */
+-			sock->sk->sk_err = -err;
+-		}
+-
+-		return datagrams;
++		sock->sk->sk_err = -err;
+ 	}
++out_put:
++	fput_light(sock->file, fput_needed);
+ 
+-	return err;
++	return datagrams;
+ }
+ 
+ SYSCALL_DEFINE5(recvmmsg, int, fd, struct mmsghdr __user *, mmsg,
+diff -duprN mm/net/tipc/socket.c n/net/tipc/socket.c
+--- mm/net/tipc/socket.c	2016-09-20 17:40:29.000000000 +0530
++++ n/net/tipc/socket.c	2017-03-31 10:42:46.000000000 +0530
+@@ -905,9 +905,6 @@ static int recv_msg(struct kiocb *iocb,
+ 		goto exit;
+ 	}
+ 
+-	/* will be updated in set_orig_addr() if needed */
+-	m->msg_namelen = 0;
+-
+ 	timeout = sock_rcvtimeo(sk, flags & MSG_DONTWAIT);
+ restart:
+ 
+@@ -1017,9 +1014,6 @@ static int recv_stream(struct kiocb *ioc
+ 		goto exit;
+ 	}
+ 
+-	/* will be updated in set_orig_addr() if needed */
+-	m->msg_namelen = 0;
+-
+ 	target = sock_rcvlowat(sk, flags & MSG_WAITALL, buf_len);
+ 	timeout = sock_rcvtimeo(sk, flags & MSG_DONTWAIT);
+ 
+diff -duprN mm/net/unix/af_unix.c n/net/unix/af_unix.c
+--- mm/net/unix/af_unix.c	2016-09-20 17:40:30.000000000 +0530
++++ n/net/unix/af_unix.c	2017-03-31 10:42:46.000000000 +0530
+@@ -315,6 +315,118 @@ found:
+ 	return s;
+ }
+ 
++/* Support code for asymmetrically connected dgram sockets
++ *
++ * If a datagram socket is connected to a socket not itself connected
++ * to the first socket (eg, /dev/log), clients may only enqueue more
++ * messages if the present receive queue of the server socket is not
++ * "too large". This means there's a second writeability condition
++ * poll and sendmsg need to test. The dgram recv code will do a wake
++ * up on the peer_wait wait queue of a socket upon reception of a
++ * datagram which needs to be propagated to sleeping would-be writers
++ * since these might not have sent anything so far. This can't be
++ * accomplished via poll_wait because the lifetime of the server
++ * socket might be less than that of its clients if these break their
++ * association with it or if the server socket is closed while clients
++ * are still connected to it and there's no way to inform "a polling
++ * implementation" that it should let go of a certain wait queue
++ *
++ * In order to propagate a wake up, a wait_queue_t of the client
++ * socket is enqueued on the peer_wait queue of the server socket
++ * whose wake function does a wake_up on the ordinary client socket
++ * wait queue. This connection is established whenever a write (or
++ * poll for write) hit the flow control condition and broken when the
++ * association to the server socket is dissolved or after a wake up
++ * was relayed.
++ */
++
++static int unix_dgram_peer_wake_relay(wait_queue_t *q, unsigned mode, int flags,
++				      void *key)
++{
++	struct unix_sock *u;
++	wait_queue_head_t *u_sleep;
++
++	u = container_of(q, struct unix_sock, peer_wake);
++
++	__remove_wait_queue(&unix_sk(u->peer_wake.private)->peer_wait,
++			    q);
++	u->peer_wake.private = NULL;
++
++	/* relaying can only happen while the wq still exists */
++	u_sleep = sk_sleep(&u->sk);
++	if (u_sleep)
++		wake_up_interruptible_poll(u_sleep, key);
++
++	return 0;
++}
++
++static int unix_dgram_peer_wake_connect(struct sock *sk, struct sock *other)
++{
++	struct unix_sock *u, *u_other;
++	int rc;
++
++	u = unix_sk(sk);
++	u_other = unix_sk(other);
++	rc = 0;
++	spin_lock(&u_other->peer_wait.lock);
++
++	if (!u->peer_wake.private) {
++		u->peer_wake.private = other;
++		__add_wait_queue(&u_other->peer_wait, &u->peer_wake);
++
++		rc = 1;
++	}
++
++	spin_unlock(&u_other->peer_wait.lock);
++	return rc;
++}
++
++static void unix_dgram_peer_wake_disconnect(struct sock *sk,
++					    struct sock *other)
++{
++	struct unix_sock *u, *u_other;
++
++	u = unix_sk(sk);
++	u_other = unix_sk(other);
++	spin_lock(&u_other->peer_wait.lock);
++
++	if (u->peer_wake.private == other) {
++		__remove_wait_queue(&u_other->peer_wait, &u->peer_wake);
++		u->peer_wake.private = NULL;
++	}
++
++	spin_unlock(&u_other->peer_wait.lock);
++}
++
++static void unix_dgram_peer_wake_disconnect_wakeup(struct sock *sk,
++						   struct sock *other)
++{
++	unix_dgram_peer_wake_disconnect(sk, other);
++	wake_up_interruptible_poll(sk_sleep(sk),
++				   POLLOUT |
++				   POLLWRNORM |
++				   POLLWRBAND);
++}
++
++/* preconditions:
++ *	- unix_peer(sk) == other
++ *	- association is stable
++ */
++static int unix_dgram_peer_wake_me(struct sock *sk, struct sock *other)
++{
++	int connected;
++
++	connected = unix_dgram_peer_wake_connect(sk, other);
++
++	if (unix_recvq_full(other))
++		return 1;
++
++	if (connected)
++		unix_dgram_peer_wake_disconnect(sk, other);
++
++	return 0;
++}
++
+ static inline int unix_writable(struct sock *sk)
+ {
+ 	return (atomic_read(&sk->sk_wmem_alloc) << 2) <= sk->sk_sndbuf;
+@@ -419,6 +531,8 @@ static void unix_release_sock(struct soc
+ 			skpair->sk_state_change(skpair);
+ 			sk_wake_async(skpair, SOCK_WAKE_WAITD, POLL_HUP);
+ 		}
++
++		unix_dgram_peer_wake_disconnect(sk, skpair);
+ 		sock_put(skpair); /* It may now die */
+ 		unix_peer(sk) = NULL;
+ 	}
+@@ -648,6 +762,7 @@ static struct sock *unix_create1(struct
+ 	INIT_LIST_HEAD(&u->link);
+ 	mutex_init(&u->readlock); /* single task reading lock */
+ 	init_waitqueue_head(&u->peer_wait);
++	init_waitqueue_func_entry(&u->peer_wake, unix_dgram_peer_wake_relay);
+ 	unix_insert_socket(unix_sockets_unbound(sk), sk);
+ out:
+ 	if (sk == NULL)
+@@ -1011,6 +1126,8 @@ restart:
+ 	if (unix_peer(sk)) {
+ 		struct sock *old_peer = unix_peer(sk);
+ 		unix_peer(sk) = other;
++		unix_dgram_peer_wake_disconnect_wakeup(sk, old_peer);
++
+ 		unix_state_double_unlock(sk, other);
+ 
+ 		if (other != old_peer)
+@@ -1333,7 +1450,7 @@ static void unix_detach_fds(struct scm_c
+ 	UNIXCB(skb).fp = NULL;
+ 
+ 	for (i = scm->fp->count-1; i >= 0; i--)
+-		unix_notinflight(scm->fp->fp[i]);
++		unix_notinflight(scm->fp->user, scm->fp->fp[i]);
+ }
+ 
+ static void unix_destruct_scm(struct sk_buff *skb)
+@@ -1350,6 +1467,21 @@ static void unix_destruct_scm(struct sk_
+ 	sock_wfree(skb);
+ }
+ 
++/*
++ * The "user->unix_inflight" variable is protected by the garbage
++ * collection lock, and we just read it locklessly here. If you go
++ * over the limit, there might be a tiny race in actually noticing
++ * it across threads. Tough.
++ */
++static inline bool too_many_unix_fds(struct task_struct *p)
++{
++	struct user_struct *user = current_user();
++
++	if (unlikely(user->unix_inflight > task_rlimit(p, RLIMIT_NOFILE)))
++		return !capable(CAP_SYS_RESOURCE) && !capable(CAP_SYS_ADMIN);
++	return false;
++}
++
+ #define MAX_RECURSION_LEVEL 4
+ 
+ static int unix_attach_fds(struct scm_cookie *scm, struct sk_buff *skb)
+@@ -1358,6 +1490,9 @@ static int unix_attach_fds(struct scm_co
+ 	unsigned char max_level = 0;
+ 	int unix_sock_count = 0;
+ 
++	if (too_many_unix_fds(current))
++		return -ETOOMANYREFS;
++
+ 	for (i = scm->fp->count - 1; i >= 0; i--) {
+ 		struct sock *sk = unix_get_socket(scm->fp->fp[i]);
+ 
+@@ -1379,10 +1514,8 @@ static int unix_attach_fds(struct scm_co
+ 	if (!UNIXCB(skb).fp)
+ 		return -ENOMEM;
+ 
+-	if (unix_sock_count) {
+-		for (i = scm->fp->count - 1; i >= 0; i--)
+-			unix_inflight(scm->fp->fp[i]);
+-	}
++	for (i = scm->fp->count - 1; i >= 0; i--)
++		unix_inflight(scm->fp->user, scm->fp->fp[i]);
+ 	return max_level;
+ }
+ 
+@@ -1440,6 +1573,7 @@ static int unix_dgram_sendmsg(struct kio
+ 	struct scm_cookie tmp_scm;
+ 	int max_level;
+ 	int data_len = 0;
++	int sk_locked;
+ 
+ 	if (NULL == siocb->scm)
+ 		siocb->scm = &tmp_scm;
+@@ -1516,12 +1650,14 @@ restart:
+ 		goto out_free;
+ 	}
+ 
++	sk_locked = 0;
+ 	unix_state_lock(other);
++restart_locked:
+ 	err = -EPERM;
+ 	if (!unix_may_send(sk, other))
+ 		goto out_unlock;
+ 
+-	if (sock_flag(other, SOCK_DEAD)) {
++	if (unlikely(sock_flag(other, SOCK_DEAD))) {
+ 		/*
+ 		 *	Check with 1003.1g - what should
+ 		 *	datagram error
+@@ -1529,10 +1665,14 @@ restart:
+ 		unix_state_unlock(other);
+ 		sock_put(other);
+ 
++		if (!sk_locked)
++			unix_state_lock(sk);
++
+ 		err = 0;
+-		unix_state_lock(sk);
+ 		if (unix_peer(sk) == other) {
+ 			unix_peer(sk) = NULL;
++			unix_dgram_peer_wake_disconnect_wakeup(sk, other);
++
+ 			unix_state_unlock(sk);
+ 
+ 			unix_dgram_disconnected(sk, other);
+@@ -1558,21 +1698,38 @@ restart:
+ 			goto out_unlock;
+ 	}
+ 
+-	if (unix_peer(other) != sk && unix_recvq_full(other)) {
+-		if (!timeo) {
+-			err = -EAGAIN;
+-			goto out_unlock;
++	if (unlikely(unix_peer(other) != sk && unix_recvq_full(other))) {
++		if (timeo) {
++			timeo = unix_wait_for_peer(other, timeo);
++
++			err = sock_intr_errno(timeo);
++			if (signal_pending(current))
++				goto out_free;
++
++			goto restart;
+ 		}
+ 
+-		timeo = unix_wait_for_peer(other, timeo);
++		if (!sk_locked) {
++			unix_state_unlock(other);
++			unix_state_double_lock(sk, other);
++		}
+ 
+-		err = sock_intr_errno(timeo);
+-		if (signal_pending(current))
+-			goto out_free;
++		if (unix_peer(sk) != other ||
++		    unix_dgram_peer_wake_me(sk, other)) {
++			err = -EAGAIN;
++			sk_locked = 1;
++			goto out_unlock;
++		}
+ 
+-		goto restart;
++		if (!sk_locked) {
++			sk_locked = 1;
++			goto restart_locked;
++		}
+ 	}
+ 
++	if (unlikely(sk_locked))
++		unix_state_unlock(sk);
++
+ 	if (sock_flag(other, SOCK_RCVTSTAMP))
+ 		__net_timestamp(skb);
+ 	maybe_add_creds(skb, sock, other);
+@@ -1586,6 +1743,8 @@ restart:
+ 	return len;
+ 
+ out_unlock:
++	if (sk_locked)
++		unix_state_unlock(sk);
+ 	unix_state_unlock(other);
+ out_free:
+ 	kfree_skb(skb);
+@@ -1596,6 +1755,10 @@ out:
+ 	return err;
+ }
+ 
++/* We use paged skbs for stream sockets, and limit occupancy to 32768
++ * bytes, and a minimun of a full page.
++ */
++#define UNIX_SKB_FRAGS_SZ (PAGE_SIZE << get_order(32768))
+ 
+ static int unix_stream_sendmsg(struct kiocb *kiocb, struct socket *sock,
+ 			       struct msghdr *msg, size_t len)
+@@ -1609,6 +1772,7 @@ static int unix_stream_sendmsg(struct ki
+ 	struct scm_cookie tmp_scm;
+ 	bool fds_sent = false;
+ 	int max_level;
++	int data_len;
+ 
+ 	if (NULL == siocb->scm)
+ 		siocb->scm = &tmp_scm;
+@@ -1643,32 +1807,18 @@ static int unix_stream_sendmsg(struct ki
+ 		size = len-sent;
+ 
+ 		/* Keep two messages in the pipe so it schedules better */
+-		if (size > ((sk->sk_sndbuf >> 1) - 64))
+-			size = (sk->sk_sndbuf >> 1) - 64;
+-
+-		if (size > SKB_MAX_ALLOC)
+-			size = SKB_MAX_ALLOC;
++		size = min_t(int, size, (sk->sk_sndbuf >> 1) - 64);
+ 
+-		/*
+-		 *	Grab a buffer
+-		 */
++		/* allow fallback to order-0 allocations */
++		size = min_t(int, size, SKB_MAX_HEAD(0) + UNIX_SKB_FRAGS_SZ);
+ 
+-		skb = sock_alloc_send_skb(sk, size, msg->msg_flags&MSG_DONTWAIT,
+-					  &err);
++		data_len = max_t(int, 0, size - SKB_MAX_HEAD(0));
+ 
+-		if (skb == NULL)
++		skb = sock_alloc_send_pskb(sk, size - data_len, data_len,
++					   msg->msg_flags & MSG_DONTWAIT, &err);
++		if (!skb)
+ 			goto out_err;
+ 
+-		/*
+-		 *	If you pass two values to the sock_alloc_send_skb
+-		 *	it tries to grab the large buffer with GFP_NOFS
+-		 *	(which can fail easily), and if it fails grab the
+-		 *	fallback size buffer which is under a page and will
+-		 *	succeed. [Alan]
+-		 */
+-		size = min_t(int, size, skb_tailroom(skb));
+-
+-
+ 		/* Only send the fds in the first buffer */
+ 		err = unix_scm_to_skb(siocb->scm, skb, !fds_sent);
+ 		if (err < 0) {
+@@ -1678,7 +1828,11 @@ static int unix_stream_sendmsg(struct ki
+ 		max_level = err + 1;
+ 		fds_sent = true;
+ 
+-		err = memcpy_fromiovec(skb_put(skb, size), msg->msg_iov, size);
++		skb_put(skb, size - data_len);
++		skb->data_len = data_len;
++		skb->len = size;
++		err = skb_copy_datagram_from_iovec(skb, 0, msg->msg_iov,
++						   sent, size);
+ 		if (err) {
+ 			kfree_skb(skb);
+ 			goto out_err;
+@@ -1752,7 +1906,6 @@ static void unix_copy_addr(struct msghdr
+ {
+ 	struct unix_sock *u = unix_sk(sk);
+ 
+-	msg->msg_namelen = 0;
+ 	if (u->addr) {
+ 		msg->msg_namelen = u->addr->len;
+ 		memcpy(msg->msg_name, u->addr->name, u->addr->len);
+@@ -1776,8 +1929,6 @@ static int unix_dgram_recvmsg(struct kio
+ 	if (flags&MSG_OOB)
+ 		goto out;
+ 
+-	msg->msg_namelen = 0;
+-
+ 	err = mutex_lock_interruptible(&u->readlock);
+ 	if (err) {
+ 		err = sock_intr_errno(sock_rcvtimeo(sk, noblock));
+@@ -1890,6 +2041,10 @@ static long unix_stream_data_wait(struct
+ 	return timeo;
+ }
+ 
++static unsigned int unix_skb_len(const struct sk_buff *skb)
++{
++	return skb->len - UNIXCB(skb).consumed;
++}
+ static int unix_stream_recvmsg(struct kiocb *iocb, struct socket *sock,
+ 			       struct msghdr *msg, size_t size,
+ 			       int flags)
+@@ -1917,8 +2072,6 @@ static int unix_stream_recvmsg(struct ki
+ 	target = sock_rcvlowat(sk, flags&MSG_WAITALL, size);
+ 	timeo = sock_rcvtimeo(sk, flags&MSG_DONTWAIT);
+ 
+-	msg->msg_namelen = 0;
+-
+ 	/* Lock the socket to prevent queue disordering
+ 	 * while sleeps in memcpy_tomsg
+ 	 */
+@@ -1977,8 +2130,8 @@ again:
+ 		}
+ 
+ 		skip = sk_peek_offset(sk, flags);
+-		while (skip >= skb->len) {
+-			skip -= skb->len;
++		while (skip >= unix_skb_len(skb)) {
++			skip -= unix_skb_len(skb);
+ 			last = skb;
+ 			skb = skb_peek_next(skb, &sk->sk_receive_queue);
+ 			if (!skb)
+@@ -2005,8 +2158,9 @@ again:
+ 			sunaddr = NULL;
+ 		}
+ 
+-		chunk = min_t(unsigned int, skb->len - skip, size);
+-		if (memcpy_toiovec(msg->msg_iov, skb->data + skip, chunk)) {
++		chunk = min_t(unsigned int, unix_skb_len(skb) - skip, size);
++		if (skb_copy_datagram_iovec(skb, UNIXCB(skb).consumed + skip,
++					    msg->msg_iov, chunk)) {
+ 			if (copied == 0)
+ 				copied = -EFAULT;
+ 			break;
+@@ -2016,14 +2170,14 @@ again:
+ 
+ 		/* Mark read part of skb as used */
+ 		if (!(flags & MSG_PEEK)) {
+-			skb_pull(skb, chunk);
++			UNIXCB(skb).consumed += chunk;
+ 
+ 			sk_peek_offset_bwd(sk, chunk);
+ 
+ 			if (UNIXCB(skb).fp)
+ 				unix_detach_fds(siocb->scm, skb);
+ 
+-			if (skb->len)
++			if (unix_skb_len(skb))
+ 				break;
+ 
+ 			skb_unlink(skb, &sk->sk_receive_queue);
+@@ -2107,7 +2261,7 @@ long unix_inq_len(struct sock *sk)
+ 	if (sk->sk_type == SOCK_STREAM ||
+ 	    sk->sk_type == SOCK_SEQPACKET) {
+ 		skb_queue_walk(&sk->sk_receive_queue, skb)
+-			amount += skb->len;
++			amount += unix_skb_len(skb);
+ 	} else {
+ 		skb = skb_peek(&sk->sk_receive_queue);
+ 		if (skb)
+@@ -2222,14 +2376,16 @@ static unsigned int unix_dgram_poll(stru
+ 		return mask;
+ 
+ 	writable = unix_writable(sk);
+-	other = unix_peer_get(sk);
+-	if (other) {
+-		if (unix_peer(other) != sk) {
+-			sock_poll_wait(file, &unix_sk(other)->peer_wait, wait);
+-			if (unix_recvq_full(other))
+-				writable = 0;
+-		}
+-		sock_put(other);
++	if (writable) {
++		unix_state_lock(sk);
++
++		other = unix_peer(sk);
++		if (other && unix_peer(other) != sk &&
++		    unix_recvq_full(other) &&
++		    unix_dgram_peer_wake_me(sk, other))
++			writable = 0;
++
++		unix_state_unlock(sk);
+ 	}
+ 
+ 	if (writable)
+diff -duprN mm/net/unix/garbage.c n/net/unix/garbage.c
+--- mm/net/unix/garbage.c	2016-09-20 17:40:30.000000000 +0530
++++ n/net/unix/garbage.c	2017-03-31 10:42:46.000000000 +0530
+@@ -122,12 +122,14 @@ struct sock *unix_get_socket(struct file
+  *	descriptor if it is for an AF_UNIX socket.
+  */
+ 
+-void unix_inflight(struct file *fp)
++void unix_inflight(struct user_struct *user, struct file *fp)
+ {
+ 	struct sock *s = unix_get_socket(fp);
++
++	spin_lock(&unix_gc_lock);
++
+ 	if (s) {
+ 		struct unix_sock *u = unix_sk(s);
+-		spin_lock(&unix_gc_lock);
+ 		if (atomic_long_inc_return(&u->inflight) == 1) {
+ 			BUG_ON(!list_empty(&u->link));
+ 			list_add_tail(&u->link, &gc_inflight_list);
+@@ -135,22 +137,28 @@ void unix_inflight(struct file *fp)
+ 			BUG_ON(list_empty(&u->link));
+ 		}
+ 		unix_tot_inflight++;
+-		spin_unlock(&unix_gc_lock);
++		user->unix_inflight++;
+ 	}
++	fp->f_cred->user->unix_inflight++;
++	spin_unlock(&unix_gc_lock);
+ }
+ 
+-void unix_notinflight(struct file *fp)
++void unix_notinflight(struct user_struct *user, struct file *fp)
+ {
+ 	struct sock *s = unix_get_socket(fp);
++
++	spin_lock(&unix_gc_lock);
++
+ 	if (s) {
+ 		struct unix_sock *u = unix_sk(s);
+-		spin_lock(&unix_gc_lock);
+ 		BUG_ON(list_empty(&u->link));
+ 		if (atomic_long_dec_and_test(&u->inflight))
+ 			list_del_init(&u->link);
+ 		unix_tot_inflight--;
+-		spin_unlock(&unix_gc_lock);
++		user->unix_inflight--;
+ 	}
++	fp->f_cred->user->unix_inflight--;
++	spin_unlock(&unix_gc_lock);
+ }
+ 
+ static void scan_inflight(struct sock *x, void (*func)(struct unix_sock *),
+diff -duprN mm/net/vmw_vsock/af_vsock.c n/net/vmw_vsock/af_vsock.c
+--- mm/net/vmw_vsock/af_vsock.c	2016-09-20 17:40:30.000000000 +0530
++++ n/net/vmw_vsock/af_vsock.c	2017-03-31 10:42:46.000000000 +0530
+@@ -1670,8 +1670,6 @@ vsock_stream_recvmsg(struct kiocb *kiocb
+ 	vsk = vsock_sk(sk);
+ 	err = 0;
+ 
+-	msg->msg_namelen = 0;
+-
+ 	lock_sock(sk);
+ 
+ 	if (sk->sk_state != SS_CONNECTED) {
+diff -duprN mm/net/vmw_vsock/vmci_transport.c n/net/vmw_vsock/vmci_transport.c
+--- mm/net/vmw_vsock/vmci_transport.c	2016-09-20 17:40:30.000000000 +0530
++++ n/net/vmw_vsock/vmci_transport.c	2017-03-31 10:42:46.000000000 +0530
+@@ -1746,8 +1746,6 @@ static int vmci_transport_dgram_dequeue(
+ 	if (flags & MSG_OOB || flags & MSG_ERRQUEUE)
+ 		return -EOPNOTSUPP;
+ 
+-	msg->msg_namelen = 0;
+-
+ 	/* Retrieve the head sk_buff from the socket's receive queue. */
+ 	err = 0;
+ 	skb = skb_recv_datagram(&vsk->sk, flags, noblock, &err);
+diff -duprN mm/net/x25/af_x25.c n/net/x25/af_x25.c
+--- mm/net/x25/af_x25.c	2016-09-20 17:40:31.000000000 +0530
++++ n/net/x25/af_x25.c	2017-03-31 10:42:46.000000000 +0530
+@@ -1340,10 +1340,9 @@ static int x25_recvmsg(struct kiocb *ioc
+ 	if (sx25) {
+ 		sx25->sx25_family = AF_X25;
+ 		sx25->sx25_addr   = x25->dest_addr;
++		msg->msg_namelen = sizeof(*sx25);
+ 	}
+ 
+-	msg->msg_namelen = sizeof(struct sockaddr_x25);
+-
+ 	x25_check_rbuf(sk);
+ 	rc = copied;
+ out_free_dgram:

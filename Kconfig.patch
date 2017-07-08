@@ -1,0 +1,15 @@
+--- mm/Kconfig	2016-09-20 17:29:24.000000000 +0530
++++ n/Kconfig	2017-03-31 10:41:26.000000000 +0530
+@@ -8,4 +8,12 @@ config SRCARCH
+ 	string
+ 	option env="SRCARCH"
+ 
++config ANDROID_VERSION
++	string
++	option env="ANDROID_VERSION"
++
++config ANDROID_MAJOR_VERSION
++	string
++	option env="ANDROID_MAJOR_VERSION"
++
+ source "arch/$SRCARCH/Kconfig"

@@ -1,0 +1,738 @@
+diff -duprN mm/sound/core/compress_offload.c n/sound/core/compress_offload.c
+--- mm/sound/core/compress_offload.c	2016-09-20 17:40:35.000000000 +0530
++++ n/sound/core/compress_offload.c	2017-03-31 10:42:48.000000000 +0530
+@@ -492,7 +492,7 @@ static int snd_compress_check_input(stru
+ {
+ 	/* first let's check the buffer parameter's */
+ 	if (params->buffer.fragment_size == 0 ||
+-			params->buffer.fragments > SIZE_MAX / params->buffer.fragment_size)
++	    params->buffer.fragments > INT_MAX / params->buffer.fragment_size)
+ 		return -EINVAL;
+ 
+ 	/* now codec parameters */
+@@ -622,9 +622,10 @@ snd_compr_set_metadata(struct snd_compr_
+ static inline int
+ snd_compr_tstamp(struct snd_compr_stream *stream, unsigned long arg)
+ {
+-	struct snd_compr_tstamp tstamp = {0};
++	struct snd_compr_tstamp tstamp;
+ 	int ret;
+ 
++	memset(&tstamp, 0, sizeof(tstamp));
+ 	ret = snd_compr_update_tstamp(stream, &tstamp);
+ 	if (ret == 0)
+ 		ret = copy_to_user((struct snd_compr_tstamp __user *)arg,
+diff -duprN mm/sound/core/hrtimer.c n/sound/core/hrtimer.c
+--- mm/sound/core/hrtimer.c	2016-09-20 17:40:35.000000000 +0530
++++ n/sound/core/hrtimer.c	2017-03-31 10:42:48.000000000 +0530
+@@ -90,7 +90,7 @@ static int snd_hrtimer_start(struct snd_
+ 	struct snd_hrtimer *stime = t->private_data;
+ 
+ 	atomic_set(&stime->running, 0);
+-	hrtimer_cancel(&stime->hrt);
++	hrtimer_try_to_cancel(&stime->hrt);
+ 	hrtimer_start(&stime->hrt, ns_to_ktime(t->sticks * resolution),
+ 		      HRTIMER_MODE_REL);
+ 	atomic_set(&stime->running, 1);
+@@ -101,6 +101,7 @@ static int snd_hrtimer_stop(struct snd_t
+ {
+ 	struct snd_hrtimer *stime = t->private_data;
+ 	atomic_set(&stime->running, 0);
++	hrtimer_try_to_cancel(&stime->hrt);
+ 	return 0;
+ }
+ 
+diff -duprN mm/sound/core/info.c n/sound/core/info.c
+--- mm/sound/core/info.c	2016-09-20 17:40:35.000000000 +0530
++++ n/sound/core/info.c	2017-03-31 10:42:48.000000000 +0530
+@@ -253,6 +253,7 @@ static ssize_t snd_info_entry_write(stru
+ 	struct snd_info_buffer *buf;
+ 	ssize_t size = 0;
+ 	loff_t pos;
++	unsigned long realloc_size;
+ 
+ 	data = file->private_data;
+ 	if (snd_BUG_ON(!data))
+@@ -261,7 +262,8 @@ static ssize_t snd_info_entry_write(stru
+ 	pos = *offset;
+ 	if (pos < 0 || (long) pos != pos || (ssize_t) count < 0)
+ 		return -EIO;
+-	if ((unsigned long) pos + (unsigned long) count < (unsigned long) pos)
++	realloc_size = (unsigned long) pos + (unsigned long) count;
++	if (realloc_size < (unsigned long) pos || realloc_size > UINT_MAX)
+ 		return -EIO;
+ 	switch (entry->content) {
+ 	case SNDRV_INFO_CONTENT_TEXT:
+diff -duprN mm/sound/core/seq/seq_clientmgr.c n/sound/core/seq/seq_clientmgr.c
+--- mm/sound/core/seq/seq_clientmgr.c	2016-09-20 17:40:35.000000000 +0530
++++ n/sound/core/seq/seq_clientmgr.c	2017-03-31 10:42:48.000000000 +0530
+@@ -1950,7 +1950,7 @@ static int snd_seq_ioctl_remove_events(s
+ 		 * No restrictions so for a user client we can clear
+ 		 * the whole fifo
+ 		 */
+-		if (client->type == USER_CLIENT)
++		if (client->type == USER_CLIENT && client->data.user.fifo)
+ 			snd_seq_fifo_clear(client->data.user.fifo);
+ 	}
+ 
+diff -duprN mm/sound/core/seq/seq_queue.c n/sound/core/seq/seq_queue.c
+--- mm/sound/core/seq/seq_queue.c	2016-09-20 17:40:36.000000000 +0530
++++ n/sound/core/seq/seq_queue.c	2017-03-31 10:42:48.000000000 +0530
+@@ -144,8 +144,10 @@ static struct snd_seq_queue *queue_new(i
+ static void queue_delete(struct snd_seq_queue *q)
+ {
+ 	/* stop and release the timer */
++	mutex_lock(&q->timer_mutex);
+ 	snd_seq_timer_stop(q->timer);
+ 	snd_seq_timer_close(q);
++	mutex_unlock(&q->timer_mutex);
+ 	/* wait until access free */
+ 	snd_use_lock_sync(&q->use_lock);
+ 	/* release resources... */
+diff -duprN mm/sound/core/timer.c n/sound/core/timer.c
+--- mm/sound/core/timer.c	2016-09-20 17:40:36.000000000 +0530
++++ n/sound/core/timer.c	2017-03-31 10:42:48.000000000 +0530
+@@ -73,7 +73,7 @@ struct snd_timer_user {
+ 	struct timespec tstamp;		/* trigger tstamp */
+ 	wait_queue_head_t qchange_sleep;
+ 	struct fasync_struct *fasync;
+-	struct mutex tread_sem;
++	struct mutex ioctl_lock;
+ };
+ 
+ /* list of timers */
+@@ -215,11 +215,13 @@ static void snd_timer_check_master(struc
+ 		    slave->slave_id == master->slave_id) {
+ 			list_move_tail(&slave->open_list, &master->slave_list_head);
+ 			spin_lock_irq(&slave_active_lock);
++			spin_lock(&master->timer->lock);
+ 			slave->master = master;
+ 			slave->timer = master->timer;
+ 			if (slave->flags & SNDRV_TIMER_IFLG_RUNNING)
+ 				list_add_tail(&slave->active_list,
+ 					      &master->slave_active_head);
++			spin_unlock(&master->timer->lock);
+ 			spin_unlock_irq(&slave_active_lock);
+ 		}
+ 	}
+@@ -345,15 +347,18 @@ int snd_timer_close(struct snd_timer_ins
+ 		    timer->hw.close)
+ 			timer->hw.close(timer);
+ 		/* remove slave links */
++		spin_lock_irq(&slave_active_lock);
++		spin_lock(&timer->lock);
+ 		list_for_each_entry_safe(slave, tmp, &timeri->slave_list_head,
+ 					 open_list) {
+-			spin_lock_irq(&slave_active_lock);
+-			_snd_timer_stop(slave, 1, SNDRV_TIMER_EVENT_RESOLUTION);
+ 			list_move_tail(&slave->open_list, &snd_timer_slave_list);
+ 			slave->master = NULL;
+ 			slave->timer = NULL;
+-			spin_unlock_irq(&slave_active_lock);
++			list_del_init(&slave->ack_list);
++			list_del_init(&slave->active_list);
+ 		}
++		spin_unlock(&timer->lock);
++		spin_unlock_irq(&slave_active_lock);
+ 		mutex_unlock(&register_mutex);
+ 	}
+  out:
+@@ -440,9 +445,12 @@ static int snd_timer_start_slave(struct
+ 
+ 	spin_lock_irqsave(&slave_active_lock, flags);
+ 	timeri->flags |= SNDRV_TIMER_IFLG_RUNNING;
+-	if (timeri->master)
++	if (timeri->master && timeri->timer) {
++		spin_lock(&timeri->timer->lock);
+ 		list_add_tail(&timeri->active_list,
+ 			      &timeri->master->slave_active_head);
++		spin_unlock(&timeri->timer->lock);
++	}
+ 	spin_unlock_irqrestore(&slave_active_lock, flags);
+ 	return 1; /* delayed start */
+ }
+@@ -488,6 +496,8 @@ static int _snd_timer_stop(struct snd_ti
+ 		if (!keep_flag) {
+ 			spin_lock_irqsave(&slave_active_lock, flags);
+ 			timeri->flags &= ~SNDRV_TIMER_IFLG_RUNNING;
++			list_del_init(&timeri->ack_list);
++			list_del_init(&timeri->active_list);
+ 			spin_unlock_irqrestore(&slave_active_lock, flags);
+ 		}
+ 		goto __end;
+@@ -693,7 +703,7 @@ void snd_timer_interrupt(struct snd_time
+ 		} else {
+ 			ti->flags &= ~SNDRV_TIMER_IFLG_RUNNING;
+ 			if (--timer->running)
+-				list_del(&ti->active_list);
++				list_del_init(&ti->active_list);
+ 		}
+ 		if ((timer->hw.flags & SNDRV_TIMER_HW_TASKLET) ||
+ 		    (ti->flags & SNDRV_TIMER_IFLG_FAST))
+@@ -1174,6 +1184,7 @@ static void snd_timer_user_ccallback(str
+ 		tu->tstamp = *tstamp;
+ 	if ((tu->filter & (1 << event)) == 0 || !tu->tread)
+ 		return;
++	memset(&r1, 0, sizeof(r1));
+ 	r1.event = event;
+ 	r1.tstamp = *tstamp;
+ 	r1.val = resolution;
+@@ -1256,7 +1267,7 @@ static int snd_timer_user_open(struct in
+ 		return -ENOMEM;
+ 	spin_lock_init(&tu->qlock);
+ 	init_waitqueue_head(&tu->qchange_sleep);
+-	mutex_init(&tu->tread_sem);
++	mutex_init(&tu->ioctl_lock);
+ 	tu->ticks = 1;
+ 	tu->queue_size = 128;
+ 	tu->queue = kmalloc(tu->queue_size * sizeof(struct snd_timer_read),
+@@ -1276,8 +1287,10 @@ static int snd_timer_user_release(struct
+ 	if (file->private_data) {
+ 		tu = file->private_data;
+ 		file->private_data = NULL;
++		mutex_lock(&tu->ioctl_lock);
+ 		if (tu->timeri)
+ 			snd_timer_close(tu->timeri);
++		mutex_unlock(&tu->ioctl_lock);
+ 		kfree(tu->queue);
+ 		kfree(tu->tqueue);
+ 		kfree(tu);
+@@ -1515,7 +1528,6 @@ static int snd_timer_user_tselect(struct
+ 	int err = 0;
+ 
+ 	tu = file->private_data;
+-	mutex_lock(&tu->tread_sem);
+ 	if (tu->timeri) {
+ 		snd_timer_close(tu->timeri);
+ 		tu->timeri = NULL;
+@@ -1559,7 +1571,6 @@ static int snd_timer_user_tselect(struct
+ 	}
+ 
+       __err:
+-      	mutex_unlock(&tu->tread_sem);
+ 	return err;
+ }
+ 
+@@ -1673,6 +1684,7 @@ static int snd_timer_user_params(struct
+ 	if (tu->timeri->flags & SNDRV_TIMER_IFLG_EARLY_EVENT) {
+ 		if (tu->tread) {
+ 			struct snd_timer_tread tread;
++			memset(&tread, 0, sizeof(tread));
+ 			tread.event = SNDRV_TIMER_EVENT_EARLY;
+ 			tread.tstamp.tv_sec = 0;
+ 			tread.tstamp.tv_nsec = 0;
+@@ -1772,7 +1784,7 @@ enum {
+ 	SNDRV_TIMER_IOCTL_PAUSE_OLD = _IO('T', 0x23),
+ };
+ 
+-static long snd_timer_user_ioctl(struct file *file, unsigned int cmd,
++static long __snd_timer_user_ioctl(struct file *file, unsigned int cmd,
+ 				 unsigned long arg)
+ {
+ 	struct snd_timer_user *tu;
+@@ -1789,17 +1801,11 @@ static long snd_timer_user_ioctl(struct
+ 	{
+ 		int xarg;
+ 
+-		mutex_lock(&tu->tread_sem);
+-		if (tu->timeri)	{	/* too late */
+-			mutex_unlock(&tu->tread_sem);
++		if (tu->timeri)	/* too late */
+ 			return -EBUSY;
+-		}
+-		if (get_user(xarg, p)) {
+-			mutex_unlock(&tu->tread_sem);
++		if (get_user(xarg, p))
+ 			return -EFAULT;
+-		}
+ 		tu->tread = xarg ? 1 : 0;
+-		mutex_unlock(&tu->tread_sem);
+ 		return 0;
+ 	}
+ 	case SNDRV_TIMER_IOCTL_GINFO:
+@@ -1832,6 +1838,18 @@ static long snd_timer_user_ioctl(struct
+ 	return -ENOTTY;
+ }
+ 
++static long snd_timer_user_ioctl(struct file *file, unsigned int cmd,
++				 unsigned long arg)
++{
++	struct snd_timer_user *tu = file->private_data;
++	long ret;
++
++	mutex_lock(&tu->ioctl_lock);
++	ret = __snd_timer_user_ioctl(file, cmd, arg);
++	mutex_unlock(&tu->ioctl_lock);
++	return ret;
++}
++
+ static int snd_timer_user_fasync(int fd, struct file * file, int on)
+ {
+ 	struct snd_timer_user *tu;
+diff -duprN mm/sound/soc/codecs/rt5659.c n/sound/soc/codecs/rt5659.c
+--- mm/sound/soc/codecs/rt5659.c	2016-09-20 17:40:48.000000000 +0530
++++ n/sound/soc/codecs/rt5659.c	2017-03-31 10:42:50.000000000 +0530
+@@ -1519,6 +1519,24 @@ int rt5659_button_detect(struct snd_soc_
+ }
+ EXPORT_SYMBOL(rt5659_button_detect);
+ 
++void rt5659_earmic_mute(int mute)
++{
++	static unsigned int reg1d;
++
++	if(mute)
++	{
++		reg1d = snd_soc_read(registered_codec, RT5659_MONO_ADC_DIG_VOL);
++		snd_soc_update_bits(registered_codec, RT5659_MONO_ADC_DIG_VOL,
++			RT5659_L_MUTE | RT5659_R_MUTE,
++			RT5659_L_MUTE | RT5659_R_MUTE);
++	}
++	else
++	{
++		snd_soc_update_bits(registered_codec, RT5659_MONO_ADC_DIG_VOL,
++		RT5659_L_MUTE | RT5659_R_MUTE, reg1d);
++	}
++}
++
+ int rt5659_check_jd_status(struct snd_soc_codec *codec)
+ {
+ 	struct rt5659_priv *rt5659 = snd_soc_codec_get_drvdata(codec);
+@@ -3367,14 +3385,17 @@ static int rt5659_sto1_filter_event(stru
+ 	struct snd_kcontrol *kcontrol, int event)
+ {
+ 	struct snd_soc_codec *codec = w->codec;
+-	static unsigned int sto_dac_mixer, mono_dac_mixer;
++	struct rt5659_priv *rt5659 = snd_soc_codec_get_drvdata(codec);
++
+ 
+ 	pr_debug("%s\n", __func__);
+ 
+ 	switch (event) {
+ 	case SND_SOC_DAPM_PRE_PMU:
+-		sto_dac_mixer = snd_soc_read(codec, RT5659_STO_DAC_MIXER);
+-		mono_dac_mixer = snd_soc_read(codec, RT5659_MONO_DAC_MIXER);
++		rt5659->dac1_sto_dac_mixer =
++			snd_soc_read(codec, RT5659_STO_DAC_MIXER);
++		rt5659->dac1_mono_dac_mixer =
++			snd_soc_read(codec, RT5659_MONO_DAC_MIXER);
+ 
+ 		snd_soc_update_bits(codec, RT5659_STO_DAC_MIXER,
+ 			RT5659_M_DAC_L1_STO_L | RT5659_M_DAC_R1_STO_L |
+@@ -3389,14 +3410,10 @@ static int rt5659_sto1_filter_event(stru
+ 		break;
+ 
+ 	case SND_SOC_DAPM_POST_PMU:
+-		snd_soc_update_bits(codec, RT5659_STO_DAC_MIXER,
+-			RT5659_M_DAC_L1_STO_L | RT5659_M_DAC_R1_STO_L |
+-			RT5659_M_DAC_L1_STO_R | RT5659_M_DAC_R1_STO_R,
+-			sto_dac_mixer);
+-		snd_soc_update_bits(codec, RT5659_MONO_DAC_MIXER,
+-			RT5659_M_DAC_L1_MONO_L | RT5659_M_DAC_R1_MONO_L |
+-			RT5659_M_DAC_L1_MONO_R | RT5659_M_DAC_R1_MONO_R,
+-			mono_dac_mixer);
++		if ((rt5659->dac1_sto_dac_mixer & 0xa0a0) != 0xa0a0 ||
++			(rt5659->dac1_mono_dac_mixer & 0xa0a0) != 0xa0a0)
++			schedule_delayed_work(&rt5659->dac1_depop_work,
++				msecs_to_jiffies(0));
+ 		break;
+ 
+ 	default:
+@@ -3410,14 +3427,18 @@ static int rt5659_monol_filter_event(str
+ 	struct snd_kcontrol *kcontrol, int event)
+ {
+ 	struct snd_soc_codec *codec = w->codec;
+-	static unsigned int sto_dac_mixer, mono_dac_mixer;
++	struct rt5659_priv *rt5659 = snd_soc_codec_get_drvdata(codec);
++
+ 
+ 	pr_debug("%s\n", __func__);
+ 
+ 	switch (event) {
+ 	case SND_SOC_DAPM_PRE_PMU:
+-		sto_dac_mixer = snd_soc_read(codec, RT5659_STO_DAC_MIXER);
+-		mono_dac_mixer = snd_soc_read(codec, RT5659_MONO_DAC_MIXER);
++		rt5659->dac2l_sto_dac_mixer =
++			snd_soc_read(codec, RT5659_STO_DAC_MIXER);
++		rt5659->dac2l_mono_dac_mixer =
++			snd_soc_read(codec, RT5659_MONO_DAC_MIXER);
++
+ 
+ 		snd_soc_update_bits(codec, RT5659_STO_DAC_MIXER,
+ 			RT5659_M_DAC_L2_STO_L | RT5659_M_DAC_L2_STO_R,
+@@ -3425,16 +3446,13 @@ static int rt5659_monol_filter_event(str
+ 		snd_soc_update_bits(codec, RT5659_MONO_DAC_MIXER,
+ 			RT5659_M_DAC_L2_MONO_L | RT5659_M_DAC_L2_MONO_R,
+ 			RT5659_M_DAC_L2_MONO_L | RT5659_M_DAC_L2_MONO_R);
+-
+ 		break;
+ 
+ 	case SND_SOC_DAPM_POST_PMU:
+-		snd_soc_update_bits(codec, RT5659_STO_DAC_MIXER,
+-			RT5659_M_DAC_L2_STO_L | RT5659_M_DAC_L2_STO_R,
+-			sto_dac_mixer);
+-		snd_soc_update_bits(codec, RT5659_MONO_DAC_MIXER,
+-			RT5659_M_DAC_L2_MONO_L | RT5659_M_DAC_L2_MONO_R,
+-			mono_dac_mixer);
++		if ((rt5659->dac2l_sto_dac_mixer & 0x0808) != 0x0808 ||
++			(rt5659->dac2l_mono_dac_mixer & 0x0808) != 0x0808)
++			schedule_delayed_work(&rt5659->dac2l_depop_work,
++				msecs_to_jiffies(0));
+ 		break;
+ 
+ 	default:
+@@ -3448,14 +3466,17 @@ static int rt5659_monor_filter_event(str
+ 	struct snd_kcontrol *kcontrol, int event)
+ {
+ 	struct snd_soc_codec *codec = w->codec;
+-	static unsigned int sto_dac_mixer, mono_dac_mixer;
++	struct rt5659_priv *rt5659 = snd_soc_codec_get_drvdata(codec);
++
+ 
+ 	pr_debug("%s\n", __func__);
+ 
+ 	switch (event) {
+ 	case SND_SOC_DAPM_PRE_PMU:
+-		sto_dac_mixer = snd_soc_read(codec, RT5659_STO_DAC_MIXER);
+-		mono_dac_mixer = snd_soc_read(codec, RT5659_MONO_DAC_MIXER);
++		rt5659->dac2r_sto_dac_mixer =
++			snd_soc_read(codec, RT5659_STO_DAC_MIXER);
++		rt5659->dac2r_mono_dac_mixer =
++			snd_soc_read(codec, RT5659_MONO_DAC_MIXER);
+ 
+ 		snd_soc_update_bits(codec, RT5659_STO_DAC_MIXER,
+ 			RT5659_M_DAC_R2_STO_L | RT5659_M_DAC_R2_STO_R,
+@@ -3466,12 +3487,10 @@ static int rt5659_monor_filter_event(str
+ 		break;
+ 
+ 	case SND_SOC_DAPM_POST_PMU:
+-		snd_soc_update_bits(codec, RT5659_STO_DAC_MIXER,
+-			RT5659_M_DAC_R2_STO_L | RT5659_M_DAC_R2_STO_R,
+-			sto_dac_mixer);
+-		snd_soc_update_bits(codec, RT5659_MONO_DAC_MIXER,
+-			RT5659_M_DAC_R2_MONO_L | RT5659_M_DAC_R2_MONO_R,
+-			mono_dac_mixer);
++		if ((rt5659->dac2r_sto_dac_mixer & 0x0202) != 0x0202 ||
++			(rt5659->dac2r_mono_dac_mixer & 0x0202) != 0x0202)
++			schedule_delayed_work(&rt5659->dac2r_depop_work,
++				msecs_to_jiffies(0));
+ 		break;
+ 
+ 	default:
+@@ -5078,6 +5097,16 @@ static int rt5659_reg_init(struct snd_so
+ 
+ 	return 0;
+ }
++#if defined(CONFIG_SEC_DEV_JACK)|| defined(CONFIG_SEC_DEV_JACK_ANT)
++bool codec_probe_done = false;
++
++bool is_codec_probe_done(void)
++{
++	pr_info("start is_codec_probe_done %d\n", codec_probe_done);
++	return codec_probe_done;
++}
++EXPORT_SYMBOL(is_codec_probe_done);
++#endif /* defined(CONFIG_SEC_DEV_JACK)|| defined(CONFIG_SEC_DEV_JACK_ANT) */
+ 
+ static int rt5659_probe(struct snd_soc_codec *codec)
+ {
+@@ -5124,6 +5153,9 @@ static int rt5659_probe(struct snd_soc_c
+ 			"Failed to create codec_efs_mount sysfs files: %d\n", ret);
+ 		return ret;
+ 	}
++#if defined(CONFIG_SEC_DEV_JACK)|| defined(CONFIG_SEC_DEV_JACK_ANT)
++	codec_probe_done = true;
++#endif /* defined(CONFIG_SEC_DEV_JACK)|| defined(CONFIG_SEC_DEV_JACK_ANT) */
+ 
+ 	schedule_delayed_work(&rt5659->calibrate_work, msecs_to_jiffies(0));
+ 
+@@ -5568,6 +5600,60 @@ static void rt5659_i2s_switch_slave_work
+ 		RT5659_I2S_MS_S);
+ }
+ 
++static void rt5659_dac1_depop_work(struct work_struct *work)
++{
++	struct rt5659_priv *rt5659 =
++		container_of(work, struct rt5659_priv, dac1_depop_work.work);
++	struct snd_soc_codec *codec = rt5659->codec;
++
++	mutex_lock(&rt5659->codec->card->dapm_mutex);
++	usleep_range(10000, 10000);
++
++	snd_soc_update_bits(codec, RT5659_STO_DAC_MIXER,
++		RT5659_M_DAC_L1_STO_L | RT5659_M_DAC_R1_STO_L |
++		RT5659_M_DAC_L1_STO_R | RT5659_M_DAC_R1_STO_R,
++		rt5659->dac1_sto_dac_mixer);
++	snd_soc_update_bits(codec, RT5659_MONO_DAC_MIXER,
++		RT5659_M_DAC_L1_MONO_L | RT5659_M_DAC_R1_MONO_L |
++		RT5659_M_DAC_L1_MONO_R | RT5659_M_DAC_R1_MONO_R,
++		rt5659->dac1_mono_dac_mixer);
++	mutex_unlock(&rt5659->codec->card->dapm_mutex);
++}
++
++static void rt5659_dac2l_depop_work(struct work_struct *work)
++{
++	struct rt5659_priv *rt5659 =
++		container_of(work, struct rt5659_priv, dac2l_depop_work.work);
++	struct snd_soc_codec *codec = rt5659->codec;
++
++	mutex_lock(&rt5659->codec->card->dapm_mutex);
++	usleep_range(10000, 10000);
++	snd_soc_update_bits(codec, RT5659_STO_DAC_MIXER,
++		RT5659_M_DAC_L2_STO_L | RT5659_M_DAC_L2_STO_R,
++		rt5659->dac2l_sto_dac_mixer);
++	snd_soc_update_bits(codec, RT5659_MONO_DAC_MIXER,
++		RT5659_M_DAC_L2_MONO_L | RT5659_M_DAC_L2_MONO_R,
++		rt5659->dac2l_mono_dac_mixer);
++	mutex_unlock(&rt5659->codec->card->dapm_mutex);
++}
++
++static void rt5659_dac2r_depop_work(struct work_struct *work)
++{
++	struct rt5659_priv *rt5659 =
++		container_of(work, struct rt5659_priv, dac2r_depop_work.work);
++	struct snd_soc_codec *codec = rt5659->codec;
++
++	mutex_lock(&rt5659->codec->card->dapm_mutex);
++	usleep_range(10000, 10000);
++	snd_soc_update_bits(codec, RT5659_STO_DAC_MIXER,
++		RT5659_M_DAC_R2_STO_L | RT5659_M_DAC_R2_STO_R,
++		rt5659->dac2r_sto_dac_mixer);
++	snd_soc_update_bits(codec, RT5659_MONO_DAC_MIXER,
++		RT5659_M_DAC_R2_MONO_L | RT5659_M_DAC_R2_MONO_R,
++		rt5659->dac2r_mono_dac_mixer);
++	mutex_unlock(&rt5659->codec->card->dapm_mutex);
++}
++
+ int rt5659_cal_data_write_efs(struct rt5659_cal_data *cal_data)
+ {
+ 	struct file *fp = NULL;
+@@ -5852,6 +5938,10 @@ static int rt5659_i2c_probe(struct i2c_c
+ 		rt5659_i2s_switch_slave_work_1);
+ 	INIT_DELAYED_WORK(&rt5659->i2s_switch_slave_work[RT5659_AIF3],
+ 		rt5659_i2s_switch_slave_work_2);
++	INIT_DELAYED_WORK(&rt5659->dac1_depop_work, rt5659_dac1_depop_work);
++	INIT_DELAYED_WORK(&rt5659->dac2l_depop_work, rt5659_dac2l_depop_work);
++	INIT_DELAYED_WORK(&rt5659->dac2r_depop_work, rt5659_dac2r_depop_work);
++
+ 	INIT_DELAYED_WORK(&rt5659->calibrate_work,
+ 		rt5659_calibrate_handler);
+ 	init_waitqueue_head(&rt5659->waitqueue_cal);
+diff -duprN mm/sound/soc/codecs/rt5659.h n/sound/soc/codecs/rt5659.h
+--- mm/sound/soc/codecs/rt5659.h	2016-09-20 17:40:48.000000000 +0530
++++ n/sound/soc/codecs/rt5659.h	2017-03-31 10:42:50.000000000 +0530
+@@ -1781,6 +1781,7 @@ struct rt5659_priv {
+ 	struct regmap *regmap;
+ 	struct i2c_client *i2c;
+ 	struct delayed_work i2s_switch_slave_work[RT5659_AIFS];
++	struct delayed_work dac1_depop_work, dac2l_depop_work, dac2r_depop_work;
+ 	struct delayed_work calibrate_work;
+ 	wait_queue_head_t waitqueue_cal;
+ 	struct mutex calibrate_mutex;
+@@ -1804,6 +1805,9 @@ struct rt5659_priv {
+ 	bool dac1_en, dac2_en;
+ 	bool hp_en, rcv_en, sto_adc_en, mono_adcl_en, mono_adcr_en;
+ 	unsigned int impedance_value;
++	unsigned int dac1_sto_dac_mixer, dac1_mono_dac_mixer;
++	unsigned int dac2l_sto_dac_mixer, dac2l_mono_dac_mixer;
++	unsigned int dac2r_sto_dac_mixer, dac2r_mono_dac_mixer;
+ 
+ 	unsigned int adb_reg_addr[0x100];
+ 	unsigned int adb_reg_value[0x100];
+diff -duprN mm/sound/soc/codecs/wm5102.c n/sound/soc/codecs/wm5102.c
+--- mm/sound/soc/codecs/wm5102.c	2016-09-20 17:40:49.000000000 +0530
++++ n/sound/soc/codecs/wm5102.c	2017-03-31 10:42:50.000000000 +0530
+@@ -666,7 +666,7 @@ static int wm5102_adsp_power_ev(struct s
+ 		break;
+ 	}
+ 
+-	return arizona_adsp_power_ev(w, kcontrol, event);
++	return wm_adsp2_early_event(w, kcontrol, event, v);
+ }
+ 
+ static int wm5102_out_comp_coeff_get(struct snd_kcontrol *kcontrol,
+@@ -798,8 +798,7 @@ ARIZONA_MIXER_CONTROLS("EQ2", ARIZONA_EQ
+ ARIZONA_MIXER_CONTROLS("EQ3", ARIZONA_EQ3MIX_INPUT_1_SOURCE),
+ ARIZONA_MIXER_CONTROLS("EQ4", ARIZONA_EQ4MIX_INPUT_1_SOURCE),
+ 
+-SND_SOC_BYTES("EQ1 Coefficients", ARIZONA_EQ1_3, 19),
+-SOC_SINGLE("EQ1 Mode Switch", ARIZONA_EQ1_2, ARIZONA_EQ1_B1_MODE, 1, 0),
++ARIZONA_EQ_CONTROL("EQ1 Coefficients", ARIZONA_EQ1_2),
+ SOC_SINGLE_TLV("EQ1 B1 Volume", ARIZONA_EQ1_1, ARIZONA_EQ1_B1_GAIN_SHIFT,
+ 	       24, 0, eq_tlv),
+ SOC_SINGLE_TLV("EQ1 B2 Volume", ARIZONA_EQ1_1, ARIZONA_EQ1_B2_GAIN_SHIFT,
+@@ -811,8 +810,7 @@ SOC_SINGLE_TLV("EQ1 B4 Volume", ARIZONA_
+ SOC_SINGLE_TLV("EQ1 B5 Volume", ARIZONA_EQ1_2, ARIZONA_EQ1_B5_GAIN_SHIFT,
+ 	       24, 0, eq_tlv),
+ 
+-SND_SOC_BYTES("EQ2 Coefficients", ARIZONA_EQ2_3, 19),
+-SOC_SINGLE("EQ2 Mode Switch", ARIZONA_EQ2_2, ARIZONA_EQ2_B1_MODE, 1, 0),
++ARIZONA_EQ_CONTROL("EQ2 Coefficients", ARIZONA_EQ2_2),
+ SOC_SINGLE_TLV("EQ2 B1 Volume", ARIZONA_EQ2_1, ARIZONA_EQ2_B1_GAIN_SHIFT,
+ 	       24, 0, eq_tlv),
+ SOC_SINGLE_TLV("EQ2 B2 Volume", ARIZONA_EQ2_1, ARIZONA_EQ2_B2_GAIN_SHIFT,
+@@ -824,8 +822,7 @@ SOC_SINGLE_TLV("EQ2 B4 Volume", ARIZONA_
+ SOC_SINGLE_TLV("EQ2 B5 Volume", ARIZONA_EQ2_2, ARIZONA_EQ2_B5_GAIN_SHIFT,
+ 	       24, 0, eq_tlv),
+ 
+-SND_SOC_BYTES("EQ3 Coefficients", ARIZONA_EQ3_3, 19),
+-SOC_SINGLE("EQ3 Mode Switch", ARIZONA_EQ3_2, ARIZONA_EQ3_B1_MODE, 1, 0),
++ARIZONA_EQ_CONTROL("EQ3 Coefficients", ARIZONA_EQ3_2),
+ SOC_SINGLE_TLV("EQ3 B1 Volume", ARIZONA_EQ3_1, ARIZONA_EQ3_B1_GAIN_SHIFT,
+ 	       24, 0, eq_tlv),
+ SOC_SINGLE_TLV("EQ3 B2 Volume", ARIZONA_EQ3_1, ARIZONA_EQ3_B2_GAIN_SHIFT,
+@@ -837,8 +834,7 @@ SOC_SINGLE_TLV("EQ3 B4 Volume", ARIZONA_
+ SOC_SINGLE_TLV("EQ3 B5 Volume", ARIZONA_EQ3_2, ARIZONA_EQ3_B5_GAIN_SHIFT,
+ 	       24, 0, eq_tlv),
+ 
+-SND_SOC_BYTES("EQ4 Coefficients", ARIZONA_EQ4_3, 19),
+-SOC_SINGLE("EQ4 Mode Switch", ARIZONA_EQ4_2, ARIZONA_EQ4_B1_MODE, 1, 0),
++ARIZONA_EQ_CONTROL("EQ4 Coefficients", ARIZONA_EQ4_2),
+ SOC_SINGLE_TLV("EQ4 B1 Volume", ARIZONA_EQ4_1, ARIZONA_EQ4_B1_GAIN_SHIFT,
+ 	       24, 0, eq_tlv),
+ SOC_SINGLE_TLV("EQ4 B2 Volume", ARIZONA_EQ4_1, ARIZONA_EQ4_B2_GAIN_SHIFT,
+@@ -874,8 +870,8 @@ SOC_ENUM("LHPF2 Mode", arizona_lhpf2_mod
+ SOC_ENUM("LHPF3 Mode", arizona_lhpf3_mode),
+ SOC_ENUM("LHPF4 Mode", arizona_lhpf4_mode),
+ 
+-SOC_VALUE_ENUM("Sample Rate 2", arizona_sample_rate[0]),
+-SOC_VALUE_ENUM("Sample Rate 3", arizona_sample_rate[1]),
++ARIZONA_SAMPLE_RATE_CONTROL_DVFS("Sample Rate 2", 2),
++ARIZONA_SAMPLE_RATE_CONTROL_DVFS("Sample Rate 3", 3),
+ 
+ SOC_VALUE_ENUM("FX Rate", arizona_fx_rate),
+ 
+@@ -2046,8 +2042,7 @@ static int wm5102_probe(struct platform_
+ 			= arizona->pdata.num_fw_defs[0];
+ 	}
+ 
+-	ret = wm_adsp2_init(&wm5102->core.adsp[0], true,
+-			    &wm5102->fw_lock);
++	ret = wm_adsp2_init(&wm5102->core.adsp[0], &wm5102->fw_lock);
+ 	if (ret != 0)
+ 		return ret;
+ 
+diff -duprN mm/sound/soc/samsung/pacific_rt5659.c n/sound/soc/samsung/pacific_rt5659.c
+--- mm/sound/soc/samsung/pacific_rt5659.c	2016-09-20 17:40:51.000000000 +0530
++++ n/sound/soc/samsung/pacific_rt5659.c	2017-03-31 10:42:51.000000000 +0530
+@@ -67,7 +67,7 @@ struct rt5659_machine_priv {
+ };
+ 
+ static struct rt5659_machine_priv pacific_rt5659_priv = {
+-#ifndef CONFIG_SEC_DEV_JACK
++#if !defined(CONFIG_SEC_DEV_JACK) &&!defined(CONFIG_SEC_DEV_JACK_ANT)
+ 	.rt5659_hp_jack_gpio = {
+ 		.name = "headphone detect",
+ 		.invert = 1,
+@@ -86,7 +86,7 @@ static const struct snd_soc_component_dr
+ 
+ static const struct snd_kcontrol_new pacific_codec_controls[] = {
+ };
+-#ifndef CONFIG_SEC_DEV_JACK
++#if !defined(CONFIG_SEC_DEV_JACK) &&!defined(CONFIG_SEC_DEV_JACK_ANT)
+ static struct switch_dev rt5659_headset_switch = {
+ 	.name = "h2w",
+ };
+@@ -112,7 +112,7 @@ static struct notifier_block rt5659_jack
+ */
+ #endif
+ 
+-#ifndef CONFIG_SEC_DEV_JACK
++#if !defined(CONFIG_SEC_DEV_JACK) &&!defined(CONFIG_SEC_DEV_JACK_ANT)
+ int rt5659_jack_status_check(void)
+ {
+ 	struct snd_soc_codec *codec = pacific_rt5659_priv.codec;
+@@ -632,7 +632,7 @@ static int pacific_of_get_pdata(struct s
+ 
+ 	return 0;
+ }
+-#ifndef CONFIG_SEC_DEV_JACK
++#if !defined(CONFIG_SEC_DEV_JACK) &&!defined(CONFIG_SEC_DEV_JACK_ANT)
+ static void jd_check_handler(struct work_struct *work)
+ {
+ 	struct snd_soc_codec *codec = pacific_rt5659_priv.codec;
+@@ -662,7 +662,7 @@ static int pacific_late_probe(struct snd
+ 	struct snd_soc_dai *codec_dai = card->rtd[0].codec_dai;
+ 	struct snd_soc_dai *cpu_dai = card->rtd[0].cpu_dai;
+ 	struct rt5659_machine_priv *priv = card->drvdata;
+-#ifndef CONFIG_SEC_DEV_JACK
++#if !defined(CONFIG_SEC_DEV_JACK) &&!defined(CONFIG_SEC_DEV_JACK_ANT)
+ 	struct snd_soc_jack *jack = &priv->rt5659_hp_jack;
+ #endif
+ 	int ret;
+@@ -699,7 +699,7 @@ static int pacific_late_probe(struct snd
+ 	snd_soc_dapm_ignore_suspend(&codec->dapm, "AIF3 Playback");
+ 	snd_soc_dapm_ignore_suspend(&codec->dapm, "AIF3 Capture");
+ 	snd_soc_dapm_sync(&codec->dapm);
+-#ifndef CONFIG_SEC_DEV_JACK
++#if !defined(CONFIG_SEC_DEV_JACK) &&!defined(CONFIG_SEC_DEV_JACK_ANT)
+ 	setup_timer(&priv->jd_check_timer, jd_check_callback, 0);
+ 	INIT_WORK(&priv->jd_check_work, jd_check_handler);
+     mutex_init(&priv->mutex);
+@@ -876,7 +876,7 @@ static int pacific_audio_probe(struct pl
+ 		}
+ 	}
+ 
+-#ifndef CONFIG_SEC_DEV_JACK
++#if !defined(CONFIG_SEC_DEV_JACK) &&!defined(CONFIG_SEC_DEV_JACK_ANT)
+ 	/* Addd h2w swith class support */
+ 	ret = switch_dev_register(&rt5659_headset_switch);
+ 	if (ret < 0) {
+@@ -908,8 +908,8 @@ static int pacific_audio_remove(struct p
+ 		clk_unprepare(priv->mclk);
+ 		devm_clk_put(card->dev, priv->mclk);
+ 	}
+-	
+-#ifndef CONFIG_SEC_DEV_JACK
++
++#if !defined(CONFIG_SEC_DEV_JACK) &&!defined(CONFIG_SEC_DEV_JACK_ANT)
+ 	switch_dev_unregister(&rt5659_headset_switch);
+ #endif
+ 	snd_soc_jack_free_gpios(&priv->rt5659_hp_jack, 1,
+diff -duprN mm/sound/soc/soc-core.c n/sound/soc/soc-core.c
+--- mm/sound/soc/soc-core.c	2016-09-20 17:40:50.000000000 +0530
++++ n/sound/soc/soc-core.c	2017-03-31 10:42:51.000000000 +0530
+@@ -2116,9 +2116,13 @@ unsigned int snd_soc_read(struct snd_soc
+ {
+ 	unsigned int ret;
+ 
+-	ret = codec->read(codec, reg);
+-	dev_dbg(codec->dev, "read %x => %x\n", reg, ret);
+-	trace_snd_soc_reg_read(codec, reg, ret);
++	if (codec->read) {
++		ret = codec->read(codec, reg);
++		dev_dbg(codec->dev, "read %x => %x\n", reg, ret);
++		trace_snd_soc_reg_read(codec, reg, ret);
++	}
++	else
++		ret = -1;
+ 
+ 	return ret;
+ }
+@@ -2127,9 +2131,13 @@ EXPORT_SYMBOL_GPL(snd_soc_read);
+ unsigned int snd_soc_write(struct snd_soc_codec *codec,
+ 			   unsigned int reg, unsigned int val)
+ {
+-	dev_dbg(codec->dev, "write %x = %x\n", reg, val);
+-	trace_snd_soc_reg_write(codec, reg, val);
+-	return codec->write(codec, reg, val);
++	if (codec->write) {
++		dev_dbg(codec->dev, "write %x = %x\n", reg, val);
++		trace_snd_soc_reg_write(codec, reg, val);
++		return codec->write(codec, reg, val);
++	}
++	else
++		return -1;
+ }
+ EXPORT_SYMBOL_GPL(snd_soc_write);
+ 
+diff -duprN mm/sound/usb/midi.c n/sound/usb/midi.c
+--- mm/sound/usb/midi.c	2016-09-20 17:40:53.000000000 +0530
++++ n/sound/usb/midi.c	2017-03-31 10:42:51.000000000 +0530
+@@ -2243,7 +2243,6 @@ int snd_usbmidi_create(struct snd_card *
+ 	else
+ 		err = snd_usbmidi_create_endpoints(umidi, endpoints);
+ 	if (err < 0) {
+-		snd_usbmidi_free(umidi);
+ 		return err;
+ 	}
+ 

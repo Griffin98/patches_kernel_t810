@@ -1,0 +1,11 @@
+diff -duprN mm/android/configs/android-base.cfg n/android/configs/android-base.cfg
+--- mm/android/configs/android-base.cfg	2016-09-20 17:29:24.000000000 +0530
++++ n/android/configs/android-base.cfg	2017-03-31 10:41:26.000000000 +0530
+@@ -125,6 +125,7 @@ CONFIG_PREEMPT=y
+ CONFIG_RESOURCE_COUNTERS=y
+ CONFIG_RTC_CLASS=y
+ CONFIG_RT_GROUP_SCHED=y
++CONFIG_SECURITY_PERF_EVENTS_RESTRICT=y
+ CONFIG_STAGING=y
+ CONFIG_SWITCH=y
+ CONFIG_SYNC=y

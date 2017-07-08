@@ -1,0 +1,1350 @@
+diff -duprN mm/include/linux/battery/charger/sm5703_charger.h n/include/linux/battery/charger/sm5703_charger.h
+--- mm/include/linux/battery/charger/sm5703_charger.h	2016-09-20 17:39:17.000000000 +0530
++++ n/include/linux/battery/charger/sm5703_charger.h	2017-03-31 10:42:36.000000000 +0530
+@@ -16,11 +16,23 @@
+ #include <linux/mfd/sm5703_irq.h>
+ 
+ enum {
++	SM5703_TOPOFF_TIMER_10m         = 0x0,
++	SM5703_TOPOFF_TIMER_20m         = 0x1,
++	SM5703_TOPOFF_TIMER_30m         = 0x2,
++	SM5703_TOPOFF_TIMER_45m         = 0x3,
++};
++
++enum {
+ 	CHG_REG = 0,
+ 	CHG_DATA,
+ 	CHG_REGS,
+ };
+ 
++#define ENABLE 1
++#define DISABLE 0
++
++extern bool sec_bat_get_slate_mode(void);
++
+ #define SM5703_CNTL				0x0C
+ #define SM5703_VBUSCNTL				0x0D
+ #define SM5703_CHGCNTL1				0x0E
+@@ -58,6 +70,7 @@ enum {
+ #define SM5703_BSTOUT_SHIFT			0
+ 
+ #define SM5703_BSTOUT_4P5           0x05
++#define SM5703_BSTOUT_5P0           0x0A
+ #define SM5703_BSTOUT_5P1           0x0B
+ 
+ #define SM5703_AUTOSTOP             0x1
+@@ -66,6 +79,10 @@ enum {
+ #define SM5703_AICLEN               0x1
+ #define SM5703_AICLEN_MASK          (1 << 7)
+ 
++#define SM5703_TOPOFF_TIMER			0x3
++#define SM5703_TOPOFF_TIMER_MASK	0x60
++#define SM5703_TOPOFF_TIMER_SHIFT	0x5
++
+ #define SM5703_VBUSLIMIT            0x3F
+ #define SM5703_VBUSLIMIT_MASK       0x3F
+ 
+diff -duprN mm/include/linux/battery/fuelgauge/sm5703_fuelgauge.h n/include/linux/battery/fuelgauge/sm5703_fuelgauge.h
+--- mm/include/linux/battery/fuelgauge/sm5703_fuelgauge.h	2016-09-20 17:39:17.000000000 +0530
++++ n/include/linux/battery/fuelgauge/sm5703_fuelgauge.h	2017-03-31 10:42:36.000000000 +0530
+@@ -121,6 +121,7 @@ struct sm5703_platform_data {
+ 	int fuel_alert_soc;
+ 	int fullsocthr;
+ 	int fg_irq;
++	bool low_temp_compensate_a8ve;
+ 	unsigned long fg_irq_attr;
+ 
+ 	char *fuelgauge_name;
+diff -duprN mm/include/linux/battery/sec_battery.h n/include/linux/battery/sec_battery.h
+--- mm/include/linux/battery/sec_battery.h	2016-09-20 17:39:18.000000000 +0530
++++ n/include/linux/battery/sec_battery.h	2017-03-31 10:42:36.000000000 +0530
+@@ -278,6 +278,7 @@ enum {
+ 	FG_REG_DUMP,
+ 	FG_RESET_CAP,
+ 	FG_CAPACITY,
++	FG_ASOC,
+ 	AUTH,
+ 	CHG_CURRENT_ADC,
+ 	WC_ADC,
+diff -duprN mm/include/linux/battery/sec_charging_common.h n/include/linux/battery/sec_charging_common.h
+--- mm/include/linux/battery/sec_charging_common.h	2016-09-20 17:39:18.000000000 +0530
++++ n/include/linux/battery/sec_charging_common.h	2017-03-31 10:42:36.000000000 +0530
+@@ -32,10 +32,6 @@
+ #include <linux/slab.h>
+ #include <linux/device.h>
+ 
+-#ifdef CONFIG_BATTERY_SWELLING_SELF_DISCHARGING
+-#include <linux/sec_batt_selfdchg_common.h>
+-#endif
+-
+ /* definitions */
+ #define	SEC_SIZEOF_POWER_SUPPLY_TYPE	POWER_SUPPLY_TYPE_WIRELESS_REMOVE
+ 
+@@ -85,9 +81,7 @@ enum sec_battery_adc_channel {
+ 	SEC_BAT_ADC_CHANNEL_NUM,
+ 	SEC_BAT_ADC_CHANNEL_CHG_TEMP,
+ 	SEC_BAT_ADC_CHANNEL_INBAT_VOLTAGE,
+-#ifdef CONFIG_BATTERY_SWELLING_SELF_DISCHARGING
+ 	SEC_BAT_ADC_CHANNEL_DISCHARGING_CHECK,
+-#endif
+ };
+ 
+ /* charging mode */
+@@ -479,10 +473,15 @@ struct sec_battery_platform_data {
+ 	unsigned int swelling_block_time;
+ #endif
+ 
+-#ifdef CONFIG_BATTERY_SWELLING_SELF_DISCHARGING
++#if defined(CONFIG_BATTERY_SWELLING_SELF_DISCHARGING)
+ 	/* self discharging */
+-	char *sdchg_type;
+-	struct sdchg_info_t *sdchg_info;
++	bool self_discharging_en;
++	unsigned int discharging_adc_max;
++	unsigned int discharging_adc_min;
++	unsigned int self_discharging_voltage_limit;
++	int force_discharging_limit;
++	int force_discharging_recov;
++	int factory_discharging;
+ #endif
+ 
+ 	/* Monitor setting */
+diff -duprN mm/include/linux/dcache.h n/include/linux/dcache.h
+--- mm/include/linux/dcache.h	2016-09-20 17:39:19.000000000 +0530
++++ n/include/linux/dcache.h	2017-03-31 10:42:36.000000000 +0530
+@@ -158,6 +158,7 @@ struct dentry_operations {
+ 	char *(*d_dname)(struct dentry *, char *, int);
+ 	struct vfsmount *(*d_automount)(struct path *);
+ 	int (*d_manage)(struct dentry *, bool);
++	void (*d_canonical_path)(const struct path *, struct path *);
+ } ____cacheline_aligned;
+ 
+ /*
+@@ -209,6 +210,7 @@ struct dentry_operations {
+ 	(DCACHE_MOUNTED|DCACHE_NEED_AUTOMOUNT|DCACHE_MANAGE_TRANSIT)
+ 
+ #define DCACHE_DENTRY_KILLED	0x100000
++#define DCACHE_WILL_INVALIDATE		0x80000000 /* will be invalidated */
+ 
+ extern seqlock_t rename_lock;
+ 
+diff -duprN mm/include/linux/fs.h n/include/linux/fs.h
+--- mm/include/linux/fs.h	2016-09-20 17:39:19.000000000 +0530
++++ n/include/linux/fs.h	2017-03-31 10:42:36.000000000 +0530
+@@ -2215,6 +2215,8 @@ extern int vfs_fsync(struct file *file,
+ extern int generic_write_sync(struct file *file, loff_t pos, loff_t count);
+ extern void emergency_sync(void);
+ extern void emergency_remount(void);
++extern int intr_sync(int *);
++
+ #ifdef CONFIG_BLOCK
+ extern sector_t bmap(struct inode *, sector_t);
+ #endif
+diff -duprN mm/include/linux/inet_diag.h n/include/linux/inet_diag.h
+--- mm/include/linux/inet_diag.h	2016-09-20 17:39:19.000000000 +0530
++++ n/include/linux/inet_diag.h	2017-03-31 10:42:36.000000000 +0530
+@@ -3,6 +3,7 @@
+ 
+ #include <uapi/linux/inet_diag.h>
+ 
++struct net;
+ struct sock;
+ struct inet_hashinfo;
+ struct nlattr;
+@@ -23,6 +24,10 @@ struct inet_diag_handler {
+ 	void			(*idiag_get_info)(struct sock *sk,
+ 						  struct inet_diag_msg *r,
+ 						  void *info);
++
++	int			(*destroy)(struct sk_buff *in_skb,
++					   struct inet_diag_req_v2 *req);
++
+ 	__u16                   idiag_type;
+ };
+ 
+@@ -38,6 +43,10 @@ void inet_diag_dump_icsk(struct inet_has
+ int inet_diag_dump_one_icsk(struct inet_hashinfo *hashinfo,
+ 		struct sk_buff *in_skb, const struct nlmsghdr *nlh,
+ 		struct inet_diag_req_v2 *req);
++		
++struct sock *inet_diag_find_one_icsk(struct net *net,
++				     struct inet_hashinfo *hashinfo,
++				     struct inet_diag_req_v2 *req);
+ 
+ int inet_diag_bc_sk(const struct nlattr *_bc, struct sock *sk);
+ 
+diff -duprN mm/include/linux/interrupt.h n/include/linux/interrupt.h
+--- mm/include/linux/interrupt.h	2016-09-20 17:39:20.000000000 +0530
++++ n/include/linux/interrupt.h	2017-03-31 10:42:36.000000000 +0530
+@@ -71,6 +71,7 @@
+ #define IRQF_FORCE_RESUME	0x00008000
+ #define IRQF_NO_THREAD		0x00010000
+ #define IRQF_EARLY_RESUME	0x00020000
++#define IRQF_GIC_MULTI_TARGET	0x10000000
+ 
+ #define IRQF_TIMER		(__IRQF_TIMER | IRQF_NO_SUSPEND | IRQF_NO_THREAD)
+ 
+diff -duprN mm/include/linux/ipv6.h n/include/linux/ipv6.h
+--- mm/include/linux/ipv6.h	2016-09-20 17:39:19.000000000 +0530
++++ n/include/linux/ipv6.h	2017-03-31 10:42:37.000000000 +0530
+@@ -217,7 +217,7 @@ struct ipv6_pinfo {
+ 	struct ipv6_ac_socklist	*ipv6_ac_list;
+ 	struct ipv6_fl_socklist __rcu *ipv6_fl_list;
+ 
+-	struct ipv6_txoptions	*opt;
++	struct ipv6_txoptions __rcu	*opt;
+ 	struct sk_buff		*pktoptions;
+ 	struct sk_buff		*rxpmtu;
+ 	struct {
+diff -duprN mm/include/linux/irq.h n/include/linux/irq.h
+--- mm/include/linux/irq.h	2016-09-20 17:39:20.000000000 +0530
++++ n/include/linux/irq.h	2017-03-31 10:42:37.000000000 +0530
+@@ -179,6 +179,7 @@ enum {
+ 	IRQD_IRQ_DISABLED		= (1 << 16),
+ 	IRQD_IRQ_MASKED			= (1 << 17),
+ 	IRQD_IRQ_INPROGRESS		= (1 << 18),
++	IRQD_GIC_MULTI_TARGET		= (1 << 28),
+ };
+ 
+ static inline bool irqd_is_setaffinity_pending(struct irq_data *d)
+diff -duprN mm/include/linux/kobject.h n/include/linux/kobject.h
+--- mm/include/linux/kobject.h	2016-09-20 17:39:21.000000000 +0530
++++ n/include/linux/kobject.h	2017-03-31 10:42:37.000000000 +0530
+@@ -54,6 +54,8 @@ enum kobject_action {
+ 	KOBJ_MOVE,
+ 	KOBJ_ONLINE,
+ 	KOBJ_OFFLINE,
++	KOBJ_POLICY_INIT,
++	KOBJ_POLICY_EXIT,
+ 	KOBJ_MAX
+ };
+ 
+diff -duprN mm/include/linux/mfd/rt5033.h n/include/linux/mfd/rt5033.h
+--- mm/include/linux/mfd/rt5033.h	2016-09-20 17:39:20.000000000 +0530
++++ n/include/linux/mfd/rt5033.h	2017-03-31 10:42:37.000000000 +0530
+@@ -102,6 +102,7 @@ struct rt5033_fled_platform_data;
+ typedef struct rt5033_charger_platform_data {
+     sec_charging_current_t *charging_current_table;
+     int chg_float_voltage;
++	int full_check_type_2nd;
+     char *charger_name;
+     uint32_t is_750kHz_switching : 1;
+     uint32_t is_fixed_switching : 1;
+diff -duprN mm/include/linux/mfd/sm5703.h n/include/linux/mfd/sm5703.h
+--- mm/include/linux/mfd/sm5703.h	2016-09-20 17:39:20.000000000 +0530
++++ n/include/linux/mfd/sm5703.h	2017-03-31 10:42:37.000000000 +0530
+@@ -92,11 +92,14 @@ struct sm5703_fled_platform_data;
+ typedef struct sm5703_charger_platform_data {
+     sec_charging_current_t *charging_current_table;
+     int chg_float_voltage;
++    int full_check_type;
++    int full_check_type_2nd;
+     int chg_autostop;
+     int chg_autoset;
+     int chg_aiclen;
+     int chg_aiclth;
+ 	int chg_vbuslimit;
++	int bst_iq3limit;
+     int fg_vol_val;
+     int fg_soc_val;
+     int fg_curr_avr_val;
+diff -duprN mm/include/linux/mm.h n/include/linux/mm.h
+--- mm/include/linux/mm.h	2016-09-20 17:39:28.000000000 +0530
++++ n/include/linux/mm.h	2017-03-31 10:42:37.000000000 +0530
+@@ -40,6 +40,17 @@ extern int sysctl_legacy_va_layout;
+ #define sysctl_legacy_va_layout 0
+ #endif
+ 
++#ifdef CONFIG_HAVE_ARCH_MMAP_RND_BITS
++extern const int mmap_rnd_bits_min;
++extern const int mmap_rnd_bits_max;
++extern int mmap_rnd_bits __read_mostly;
++#endif
++#ifdef CONFIG_HAVE_ARCH_MMAP_RND_COMPAT_BITS
++extern const int mmap_rnd_compat_bits_min;
++extern const int mmap_rnd_compat_bits_max;
++extern int mmap_rnd_compat_bits __read_mostly;
++#endif
++
+ #include <asm/page.h>
+ #include <asm/pgtable.h>
+ #include <asm/processor.h>
+@@ -1711,6 +1722,7 @@ static inline struct page *follow_page(s
+ #define FOLL_HWPOISON	0x100	/* check page is hwpoisoned */
+ #define FOLL_NUMA	0x200	/* force NUMA hinting page fault */
+ #define FOLL_MIGRATION	0x400	/* wait for page to replace migration entry */
++#define FOLL_COW	0x4000	/* internal GUP flag */
+ 
+ typedef int (*pte_fn_t)(pte_t *pte, pgtable_t token, unsigned long addr,
+ 			void *data);
+diff -duprN mm/include/linux/mmc/card.h n/include/linux/mmc/card.h
+--- mm/include/linux/mmc/card.h	2016-09-20 17:39:28.000000000 +0530
++++ n/include/linux/mmc/card.h	2017-03-31 10:42:37.000000000 +0530
+@@ -464,6 +464,7 @@ static inline void __maybe_unused remove
+ #define mmc_card_set_doing_bkops(c)	((c)->state |= MMC_STATE_DOING_BKOPS)
+ #define mmc_card_clr_doing_bkops(c)	((c)->state &= ~MMC_STATE_DOING_BKOPS)
+ #define mmc_card_clr_hs200(c)	((c)->state &= ~MMC_STATE_HIGHSPEED_200)
++#define mmc_card_clr_present(c)	((c)->state &= ~MMC_STATE_PRESENT)
+ 
+ /*
+  * Quirk add/remove for MMC products.
+diff -duprN mm/include/linux/mmc/dw_mmc.h n/include/linux/mmc/dw_mmc.h
+--- mm/include/linux/mmc/dw_mmc.h	2016-09-20 17:39:28.000000000 +0530
++++ n/include/linux/mmc/dw_mmc.h	2017-03-31 10:42:37.000000000 +0530
+@@ -348,6 +348,7 @@ struct dw_mci {
+ 	struct regulator	*vqmmc;
+ 	unsigned long		irq_flags; /* IRQ flags */
+ 	int			irq;
++	int			cd_irq;
+ 
+ 	/* Save request status */
+ #define DW_MMC_REQ_IDLE		0
+diff -duprN mm/include/linux/muic/muic.h n/include/linux/muic/muic.h
+--- mm/include/linux/muic/muic.h	2016-09-20 17:39:29.000000000 +0530
++++ n/include/linux/muic/muic.h	2017-03-31 10:42:37.000000000 +0530
+@@ -58,6 +58,13 @@ enum {
+ 	MUIC_PATH_AUDIO,
+ };
+ 
++#ifdef CONFIG_MUIC_HV_FORCE_LIMIT
++enum {
++	HV_9V = 0,
++	HV_5V,
++};
++#endif
++
+ /* bootparam SWITCH_SEL */
+ enum {
+ 	SWITCH_SEL_USB_MASK	= 0x1,
+@@ -158,6 +165,17 @@ typedef enum {
+ 	ATTACHED_DEV_NUM,
+ } muic_attached_dev_t;
+ 
++#ifdef CONFIG_MUIC_HV_FORCE_LIMIT
++/* MUIC attached device type */
++typedef enum {
++	SILENT_CHG_DONE = 0,
++	SILENT_CHG_CHANGING = 1,
++
++	SILENT_CHG_NUM,
++} muic_silent_change_state_t;
++#endif
++
++
+ /* muic common callback driver internal data structure
+  * that setted at muic-core.c file
+  */
+@@ -173,6 +191,11 @@ struct muic_platform_data {
+ 	bool rustproof_on;
+ 	bool afc_disable;
+ 
++#ifdef CONFIG_MUIC_HV_FORCE_LIMIT
++	int hv_sel;
++	int silent_chg_change_state;
++#endif
++
+ 	/* muic switch dev register function for DockObserver */
+ 	void (*init_switch_dev_cb) (void);
+ 	void (*cleanup_switch_dev_cb) (void);
+diff -duprN mm/include/linux/net.h n/include/linux/net.h
+--- mm/include/linux/net.h	2016-09-20 17:39:29.000000000 +0530
++++ n/include/linux/net.h	2017-03-31 10:42:37.000000000 +0530
+@@ -163,6 +163,14 @@ struct proto_ops {
+ #endif
+ 	int		(*sendmsg)   (struct kiocb *iocb, struct socket *sock,
+ 				      struct msghdr *m, size_t total_len);
++	/* Notes for implementing recvmsg:
++	 * ===============================
++	 * msg->msg_namelen should get updated by the recvmsg handlers
++	 * iff msg_name != NULL. It is by default 0 to prevent
++	 * returning uninitialized memory to user space.  The recvfrom
++	 * handlers can assume that msg.msg_name is either NULL or has
++	 * a minimum size of sizeof(struct sockaddr_storage).
++	 */
+ 	int		(*recvmsg)   (struct kiocb *iocb, struct socket *sock,
+ 				      struct msghdr *m, size_t total_len,
+ 				      int flags);
+diff -duprN mm/include/linux/nfc/sec_nfc.h n/include/linux/nfc/sec_nfc.h
+--- mm/include/linux/nfc/sec_nfc.h	2016-09-20 17:39:24.000000000 +0530
++++ n/include/linux/nfc/sec_nfc.h	2017-03-31 10:42:37.000000000 +0530
+@@ -12,6 +12,97 @@
+  */
+ 
+ #include <linux/platform_device.h>
++
++#ifdef CONFIG_SEC_NFC_SENN3AB
++#include <linux/pinctrl/consumer.h>
++
++#define SEC_NFC_DRIVER_NAME		"sec-nfc"
++#define SEC_NFC_FN_DRIVER_NAME		"sec-nfc-fn"
++#define SEC_NFC_PROCESS_NAME    "com.android.nfc"
++
++#define SEC_NFC_MAX_BUFFER_SIZE	512
++#define SEC_NFC_PROCESS_NAME_SIZE 128
++
++/* ioctl */
++#define SEC_NFC_MAGIC	'S'
++#define SEC_NFC_GET_MODE		_IOW(SEC_NFC_MAGIC, 0, unsigned int)
++#define SEC_NFC_SET_MODE		_IOW(SEC_NFC_MAGIC, 1, unsigned int)
++#define SEC_NFC_GET_PUSH		_IOW(SEC_NFC_MAGIC, 2, unsigned int)
++#define SEC_NFC_SET_UART_STATE	_IOW(SEC_NFC_MAGIC, 3, unsigned int)
++#define SEC_NFC_EDC_SWEEP	_IOW(SEC_NFC_MAGIC, 4, unsigned int)
++
++// Security
++#define SEC_NFC_FUSE_ID             0x00
++#define SEC_NFC_SVC_FUSE            0x08
++#define SEC_NFC_IS_SW_FUSE_BLOWN_ID 0x02
++static uid_t g_secnfc_uid = 1027;
++
++uint8_t check_custom_kernel(void);
++// End of Security
++
++/* size */
++#define SEC_NFC_MSG_MIN_SIZE	1
++#define SEC_NFC_MSG_MAX_SIZE	(256 + 4)
++
++/* wait for device stable */
++#define SEC_NFC_VEN_WAIT_TIME	(100)
++
++#ifdef CONFIG_SEC_NFC_LDO_JPN_CONTROL
++#define NFC_I2C_LDO_ON  1
++#define NFC_I2C_LDO_OFF 0
++#endif
++/* gpio pin configuration */
++struct sec_nfc_platform_data {
++//	unsigned int irq;
++	unsigned int ven;
++	unsigned int firm;
++	unsigned int tvdd;
++	void	(*cfg_gpio)(void);
++	u32 pon_gpio_flags;
++	u32 rfs_gpio_flags;
++	u32 tvdd_gpio_flags;
++	struct pinctrl *nfc_pinctrl;
++	struct pinctrl_state *nfc_suspend;
++	struct pinctrl_state *nfc_active;
++#ifdef CONFIG_SEC_NFC_LDO_JPN_CONTROL
++        const char *i2c_1p8;
++	const char *ldo_tvdd;
++#endif
++};
++
++#define STATE_FIRM_HIGH	1
++#define STATE_FIRM_LOW	0
++
++enum sec_nfc_state {
++	SEC_NFC_ST_OFF = 0,
++	SEC_NFC_ST_NORM,
++	SEC_NFC_ST_FIRM,
++	SEC_NFC_ST_COUNT,
++};
++
++enum sec_nfc_uart_state {
++	SEC_NFC_ST_UART_OFF = 0,
++	SEC_NFC_ST_UART_ON,
++
++};
++
++#ifdef CONFIG_SEC_NFC_SENN3AB_FN
++struct sec_nfc_fn_platform_data {
++	unsigned int push;
++	void    (*cfg_gpio)(void);
++	u32 int_gpio_flags;
++};
++
++enum readable_state {
++	RDABLE_NULL = 0,
++	RDABLE_NO,
++	RDABLE_PENDING,
++	RDABLE_YES,
++};
++#endif
++
++#else /* CONFIG_SEC_NFC_SENN3AB */
++
+ #ifdef CONFIG_SEC_NFC_CLK_REQ
+ #include <linux/clk.h>
+ #endif
+@@ -119,7 +210,8 @@ enum sec_nfc_wake {
+ 	SEC_NFC_WAKE_SLEEP = 0,
+ 	SEC_NFC_WAKE_UP,
+ };
++#endif /* CONFIG_SEC_NFC_SENN3AB */
+ 
+-#if defined(CONFIG_SEC_NFC_LDO_CONTROL)
++#if defined(CONFIG_SEC_NFC_LDO_CONTROL) || defined(CONFIG_SEC_NFC_LDO_JPN_CONTROL)
+ extern unsigned int lpcharge;
+ #endif
+diff -duprN mm/include/linux/of_dma.h n/include/linux/of_dma.h
+--- mm/include/linux/of_dma.h	2016-09-20 17:39:24.000000000 +0530
++++ n/include/linux/of_dma.h	2017-03-31 10:42:38.000000000 +0530
+@@ -44,6 +44,7 @@ extern struct dma_chan *of_dma_simple_xl
+ 		struct of_dma *ofdma);
+ extern unsigned int of_dma_get_mcode_addr(struct device_node *np);
+ extern bool of_dma_secure_mode(struct device_node *np);
++extern bool of_dma_multi_irq(struct device_node *np);
+ #else
+ static inline unsigned int of_dma_get_mcode_addr(struct device_node *np)
+ {
+@@ -76,6 +77,11 @@ static inline struct dma_chan *of_dma_si
+ {
+ 	return NULL;
+ }
++
++static inline bool of_dma_multi_irq(struct device_node *np)
++{
++	return NULL;
++}
+ 
+ #endif
+ 
+diff -duprN mm/include/linux/perf_event.h n/include/linux/perf_event.h
+--- mm/include/linux/perf_event.h	2016-09-20 17:39:30.000000000 +0530
++++ n/include/linux/perf_event.h	2017-03-31 10:42:38.000000000 +0530
+@@ -700,6 +700,11 @@ extern int perf_proc_update_handler(stru
+ 		void __user *buffer, size_t *lenp,
+ 		loff_t *ppos);
+ 
++static inline bool perf_paranoid_any(void)
++{
++	return sysctl_perf_event_paranoid > 2;
++}
++
+ static inline bool perf_paranoid_tracepoint_raw(void)
+ {
+ 	return sysctl_perf_event_paranoid > -1;
+diff -duprN mm/include/linux/pid.h n/include/linux/pid.h
+--- mm/include/linux/pid.h	2016-09-20 17:39:30.000000000 +0530
++++ n/include/linux/pid.h	2017-03-31 10:42:38.000000000 +0530
+@@ -8,7 +8,9 @@ enum pid_type
+ 	PIDTYPE_PID,
+ 	PIDTYPE_PGID,
+ 	PIDTYPE_SID,
+-	PIDTYPE_MAX
++	PIDTYPE_MAX,
++	/* only valid to __task_pid_nr_ns() */
++	__PIDTYPE_TGID
+ };
+ 
+ /*
+diff -duprN mm/include/linux/pipe_fs_i.h n/include/linux/pipe_fs_i.h
+--- mm/include/linux/pipe_fs_i.h	2016-09-20 17:39:30.000000000 +0530
++++ n/include/linux/pipe_fs_i.h	2017-03-31 10:42:38.000000000 +0530
+@@ -42,6 +42,7 @@ struct pipe_buffer {
+  *	@fasync_readers: reader side fasync
+  *	@fasync_writers: writer side fasync
+  *	@bufs: the circular array of pipe buffers
++ *	@user: the user who created this pipe
+  **/
+ struct pipe_inode_info {
+ 	struct mutex mutex;
+@@ -57,6 +58,7 @@ struct pipe_inode_info {
+ 	struct fasync_struct *fasync_readers;
+ 	struct fasync_struct *fasync_writers;
+ 	struct pipe_buffer *bufs;
++	struct user_struct *user;
+ };
+ 
+ /*
+@@ -140,6 +142,8 @@ void pipe_unlock(struct pipe_inode_info
+ void pipe_double_lock(struct pipe_inode_info *, struct pipe_inode_info *);
+ 
+ extern unsigned int pipe_max_size, pipe_min_size;
++extern unsigned long pipe_user_pages_hard;
++extern unsigned long pipe_user_pages_soft;
+ int pipe_proc_fn(struct ctl_table *, int, void __user *, size_t *, loff_t *);
+ 
+ 
+diff -duprN mm/include/linux/platform_data/spi-s3c64xx.h n/include/linux/platform_data/spi-s3c64xx.h
+--- mm/include/linux/platform_data/spi-s3c64xx.h	2016-09-20 17:39:30.000000000 +0530
++++ n/include/linux/platform_data/spi-s3c64xx.h	2017-03-31 10:42:38.000000000 +0530
+@@ -133,6 +133,8 @@ struct s3c64xx_spi_driver_data {
+ 	struct pinctrl_state		*pin_def;
+ 	struct pinctrl_state		*pin_idle;
+ 
++	int is_probed;
++	int spi_clkoff_time;
+ };
+ 
+ /**
+diff -duprN mm/include/linux/pstore.h n/include/linux/pstore.h
+--- mm/include/linux/pstore.h	2016-09-20 17:39:29.000000000 +0530
++++ n/include/linux/pstore.h	2017-03-31 10:42:38.000000000 +0530
+@@ -35,6 +35,11 @@ enum pstore_type_id {
+ 	PSTORE_TYPE_MCE		= 1,
+ 	PSTORE_TYPE_CONSOLE	= 2,
+ 	PSTORE_TYPE_FTRACE	= 3,
++	/* PPC64 partition types */
++	PSTORE_TYPE_PPC_RTAS	= 4,
++	PSTORE_TYPE_PPC_OF	= 5,
++	PSTORE_TYPE_PPC_COMMON	= 6,
++	PSTORE_TYPE_PMSG	= 7,
+ 	PSTORE_TYPE_UNKNOWN	= 255
+ };
+ 
+@@ -47,25 +52,28 @@ struct pstore_info {
+ 	char		*buf;
+ 	size_t		bufsize;
+ 	struct mutex	read_mutex;	/* serialize open/read/close */
++	int		flags;
+ 	int		(*open)(struct pstore_info *psi);
+ 	int		(*close)(struct pstore_info *psi);
+ 	ssize_t		(*read)(u64 *id, enum pstore_type_id *type,
+ 			int *count, struct timespec *time, char **buf,
+-			struct pstore_info *psi);
++			bool *compressed, struct pstore_info *psi);
+ 	int		(*write)(enum pstore_type_id type,
+ 			enum kmsg_dump_reason reason, u64 *id,
+-			unsigned int part, int count, size_t size,
+-			struct pstore_info *psi);
++			unsigned int part, int count, bool compressed,
++			size_t size, struct pstore_info *psi);
+ 	int		(*write_buf)(enum pstore_type_id type,
+ 			enum kmsg_dump_reason reason, u64 *id,
+-			unsigned int part, const char *buf, size_t size,
+-			struct pstore_info *psi);
++			unsigned int part, const char *buf, bool compressed,
++			size_t size, struct pstore_info *psi);
+ 	int		(*erase)(enum pstore_type_id type, u64 id,
+ 			int count, struct timespec time,
+ 			struct pstore_info *psi);
+ 	void		*data;
+ };
+ 
++#define	PSTORE_FLAGS_FRAGILE	1
++
+ #ifdef CONFIG_PSTORE
+ extern int pstore_register(struct pstore_info *);
+ extern bool pstore_cannot_block_path(enum kmsg_dump_reason reason);
+diff -duprN mm/include/linux/pstore_ram.h n/include/linux/pstore_ram.h
+--- mm/include/linux/pstore_ram.h	2016-09-20 17:39:29.000000000 +0530
++++ n/include/linux/pstore_ram.h	2017-03-31 10:42:38.000000000 +0530
+@@ -53,7 +53,8 @@ struct persistent_ram_zone {
+ };
+ 
+ struct persistent_ram_zone *persistent_ram_new(phys_addr_t start, size_t size,
+-			u32 sig, struct persistent_ram_ecc_info *ecc_info);
++			u32 sig, struct persistent_ram_ecc_info *ecc_info,
++			unsigned int memtype);
+ void persistent_ram_free(struct persistent_ram_zone *prz);
+ void persistent_ram_zap(struct persistent_ram_zone *prz);
+ 
+@@ -67,6 +68,8 @@ void persistent_ram_free_old(struct pers
+ ssize_t persistent_ram_ecc_string(struct persistent_ram_zone *prz,
+ 	char *str, size_t len);
+ 
++void ramoops_console_write_buf(const char *buf, size_t size);
++
+ /*
+  * Ramoops platform data
+  * @mem_size	memory size for ramoops
+@@ -76,9 +79,11 @@ ssize_t persistent_ram_ecc_string(struct
+ struct ramoops_platform_data {
+ 	unsigned long	mem_size;
+ 	unsigned long	mem_address;
++	unsigned int	mem_type;
+ 	unsigned long	record_size;
+ 	unsigned long	console_size;
+ 	unsigned long	ftrace_size;
++	unsigned long	pmsg_size;
+ 	int		dump_oops;
+ 	struct persistent_ram_ecc_info ecc_info;
+ };
+diff -duprN mm/include/linux/random.h n/include/linux/random.h
+--- mm/include/linux/random.h	2016-09-20 17:39:29.000000000 +0530
++++ n/include/linux/random.h	2017-03-31 10:42:38.000000000 +0530
+@@ -23,6 +23,7 @@ extern const struct file_operations rand
+ #endif
+ 
+ unsigned int get_random_int(void);
++unsigned long get_random_long(void);
+ unsigned long randomize_range(unsigned long start, unsigned long end, unsigned long len);
+ 
+ u32 prandom_u32(void);
+diff -duprN mm/include/linux/sched.h n/include/linux/sched.h
+--- mm/include/linux/sched.h	2016-09-20 17:39:31.000000000 +0530
++++ n/include/linux/sched.h	2017-03-31 10:42:38.000000000 +0530
+@@ -673,6 +673,8 @@ struct user_struct {
+ 	unsigned long mq_bytes;	/* How many bytes can be allocated to mqueue? */
+ #endif
+ 	unsigned long locked_shm; /* How many pages of mlocked shm ? */
++	unsigned long unix_inflight;	/* How many files in flight in unix sockets */
++	atomic_long_t pipe_bufs;  /* how many pages are allocated in pipe buffers */
+ 
+ #ifdef CONFIG_KEYS
+ 	struct key *uid_keyring;	/* UID specific keyring */
+@@ -1534,13 +1536,7 @@ static inline pid_t task_tgid_nr(struct
+ 	return tsk->tgid;
+ }
+ 
+-pid_t task_tgid_nr_ns(struct task_struct *tsk, struct pid_namespace *ns);
+-
+-static inline pid_t task_tgid_vnr(struct task_struct *tsk)
+-{
+-	return pid_vnr(task_tgid(tsk));
+-}
+-
++static pid_t task_tgid_nr_ns(struct task_struct *tsk, struct pid_namespace *ns);
+ 
+ static inline pid_t task_pgrp_nr_ns(struct task_struct *tsk,
+ 					struct pid_namespace *ns)
+@@ -1565,6 +1561,16 @@ static inline pid_t task_session_vnr(str
+ 	return __task_pid_nr_ns(tsk, PIDTYPE_SID, NULL);
+ }
+ 
++static inline pid_t task_tgid_nr_ns(struct task_struct *tsk, struct pid_namespace *ns)
++{
++	return __task_pid_nr_ns(tsk, __PIDTYPE_TGID, ns);
++}
++
++static inline pid_t task_tgid_vnr(struct task_struct *tsk)
++{
++	return __task_pid_nr_ns(tsk, __PIDTYPE_TGID, NULL);
++}
++
+ /* obsolete, do not use */
+ static inline pid_t task_pgrp_nr(struct task_struct *tsk)
+ {
+diff -duprN mm/include/linux/sec_batt_selfdchg_common.h n/include/linux/sec_batt_selfdchg_common.h
+--- mm/include/linux/sec_batt_selfdchg_common.h	2016-09-20 17:39:31.000000000 +0530
++++ n/include/linux/sec_batt_selfdchg_common.h	1970-01-01 05:30:00.000000000 +0530
+@@ -1,173 +0,0 @@
+-/*
+-  * Samsung Mobile VE Group.
+-  *
+-  * drivers/battery/sec_batt_dischg_no_ic_by_policy.h
+-  *
+-  * Common header for for samsung batter self discharging.
+-  *
+-  * Copyright (C) 2015, Samsung Electronics.
+-  *
+-  * This program is free software. You can redistribute it and/or modify
+-  * it under the terms of the GNU General Public License version 2 as
+-  * published by the Free Software Foundation
+-  */
+-
+-#ifndef __SDCHG_COMMON_H__
+-#define __SDCHG_COMMON_H__
+-
+-/******************************************/
+-// Original Header
+-#include <linux/pm.h>
+-#include <linux/device.h>
+-#include <linux/platform_device.h>
+-#include <linux/kernel.h>
+-#include <linux/module.h>
+-#include <linux/timer.h>
+-#include <linux/power_supply.h>
+-#include <linux/cpufreq.h>
+-#include <linux/delay.h>
+-#include <linux/workqueue.h>
+-#include <linux/cpu.h>
+-#include <linux/sched.h>
+-#include <linux/fb.h>
+-#include <linux/pm_qos.h>
+-#include <linux/reboot.h>
+-#include <linux/alarmtimer.h>
+-#include <linux/suspend.h>
+-#include <linux/wakelock.h>
+-
+-/******************************************/
+-/* Code Control Feature (for no discharging IC) */
+-/******************************************/
+-//#define SDCHG_SELF_TEST
+-//#define SDCHG_CHECK_TYPE_SOC  // for using soc(not voltage)
+-/******************************************/
+-
+-/******************************************/
+-/* Condition Feature (for no discharging IC) */
+-/******************************************/
+-/* default value (applied in case of no having dt data) */
+-#define SDCHG_TEMP_START	600
+-#define SDCHG_TEMP_END		550
+-
+-#ifdef SDCHG_SELF_TEST
+-#define SDCHG_SOC_START			96	//99	,93
+-#define SDCHG_SOC_END			92	//98	,92
+-#define SDCHG_VOLTAGE_START	4250	// 4320
+-#define SDCHG_VOLTAGE_END		4200	// 4300
+-#else
+-#define SDCHG_SOC_START			96
+-#define SDCHG_SOC_END			92
+-#define SDCHG_VOLTAGE_START	4250	// Soc 96
+-#define SDCHG_VOLTAGE_END		4200	// Soc 92
+-#endif
+-/******************************************/
+-#ifdef SDCHG_CHECK_TYPE_SOC
+-#define SDCHG_BATTCOND_START	sdchg_info->soc_start
+-#define SDCHG_BATTCOND_END		sdchg_info->soc_end
+-#else
+-#define SDCHG_BATTCOND_START	sdchg_info->voltage_start
+-#define SDCHG_BATTCOND_END		sdchg_info->voltage_end
+-#endif
+-/******************************************/
+-/* for no discharging IC */
+-/******************************************/
+-enum __sdchg_state__ {
+-	SDCHG_STATE_NONE = 0,
+-	SDCHG_STATE_SET,
+-	SDCHG_STATE_SET_DISPLAY_ON,
+-#ifdef SDCHG_SUB_POLICY_SET
+-	SDCHG_STATE_SET_LOW,
+-	SDCHG_STATE_SET_LOW_DISPLAY_ON,
+-#endif
+-	SDCHG_STATE_MAX
+-};
+-
+-enum __sdchg_charger_type__ {
+-	SDCHG_CHARGER_NONE = 0,
+-	SDCHG_CHARGER_MUIC,
+-	SDCHG_CHARGER_WIRELESS,
+-	SDCHG_CHARGER_MAX
+-};
+-/******************************************/
+-struct sdchg_info_chip_t
+-{
+-	int factory_discharging;
+-	u32 adc_max;
+-	u32 adc_min;
+-	u32 ntc_limit;
+-	bool sdchg_en;
+-	struct sdchg_info_t *pinfo;
+-};
+-
+-struct sdchg_info_nochip_t
+-{
+-	int need_state;
+-	int set_state;
+-
+-	struct wake_lock wake_lock;
+-	struct wake_lock end_wake_lock;
+-	bool wake_lock_set;
+-
+-#ifdef CONFIG_FB
+-	bool display_on;
+-	struct notifier_block fb_nb;
+-#endif
+-	bool state_machine_run;
+-
+-	void (*sdchg_monitor)(void *, __kernel_time_t, bool);
+-
+-	struct sdchg_info_t *pinfo;
+-
+-	void *pData;		// personal data
+-};
+-
+-struct sdchg_info_t
+-{
+-	char *type;
+-
+-	struct list_head info_list;
+-
+-	void *battery;
+-
+-	/*********************/
+-	/* dt data */
+-	u32 temp_start;
+-	u32 temp_end;
+-	u32 soc_start;
+-	u32 soc_end;
+-	u32 voltage_start;
+-	u32 voltage_end;	// use battery,swelling_drop_float_voltage
+-	/*********************/
+-
+-	// func
+-	int (*sdchg_probe)(void *);
+-	int (*sdchg_remove)(void);
+-	void (*sdchg_parse_dt)(struct device *);
+-
+-	// factory func
+-	void (*sdchg_adc_check)(void *);
+-	void (*sdchg_ntc_check)(void *);
+-	void (*sdchg_force_control)(void *, bool);
+-	void (*sdchg_discharging_check)(void *);
+-
+-	int (*sdchg_force_check)(void *);
+-
+-	// nochip data
+-	struct sdchg_info_chip_t *chip;
+-	struct sdchg_info_nochip_t *nochip;
+-};
+-
+-extern struct list_head sdchg_info_head;
+-extern bool sdchg_nochip_support;
+-
+-extern int wireless_charger_notifier_register(struct notifier_block *nb, notifier_fn_t notifier);
+-extern int wireless_charger_notifier_unregister(struct notifier_block *nb);
+-
+-extern bool sdchg_check_polling_time(__kernel_time_t curr);
+-extern void sdchg_set_polling_time(int polling_time);
+-extern unsigned int sdchg_get_polling_time(unsigned int cur_polling_time);
+-
+-#endif	// #ifndef __SDCHG_COMMON_H__
+-
+-
+diff -duprN mm/include/linux/sec_debug.h n/include/linux/sec_debug.h
+--- mm/include/linux/sec_debug.h	2016-09-20 17:39:30.000000000 +0530
++++ n/include/linux/sec_debug.h	2017-03-31 10:42:38.000000000 +0530
+@@ -410,4 +410,8 @@ extern void sec_debug_panic_handler_safe
+ 
+ extern void read_lcd_register(void);
+ 
++#ifdef CONFIG_SEC_LOG_PMSG
++extern int sec_log_hook_pmsg(char *buffer, size_t count);
++#endif
++
+ #endif				/* SEC_DEBUG_H */
+diff -duprN mm/include/linux/sec_jack_ant.h n/include/linux/sec_jack_ant.h
+--- mm/include/linux/sec_jack_ant.h	1970-01-01 05:30:00.000000000 +0530
++++ n/include/linux/sec_jack_ant.h	2017-03-31 10:42:38.000000000 +0530
+@@ -0,0 +1,66 @@
++/*
++ * Copyright (C) 2008 Samsung Electronics, Inc.
++ *
++ * This software is licensed under the terms of the GNU General Public
++ * License version 2, as published by the Free Software Foundation, and
++ * may be copied, distributed, and modified under those terms.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ */
++
++#ifndef __ASM_ARCH_SEC_HEADSET_H
++#define __ASM_ARCH_SEC_HEADSET_H
++
++#ifdef __KERNEL__
++
++enum {
++	SEC_JACK_NO_DEVICE		= 0x0,
++	SEC_HEADSET_4POLE		= 0x01 << 0,
++	SEC_HEADSET_3POLE		= 0x01 << 1,
++	SEC_TTY_DEVICE			= 0x01 << 2,
++	SEC_FM_HEADSET			= 0x01 << 3,
++	SEC_FM_SPEAKER			= 0x01 << 4,
++	SEC_TVOUT_DEVICE		= 0x01 << 5,
++	SEC_EXTRA_DOCK_SPEAKER		= 0x01 << 6,
++	SEC_EXTRA_CAR_DOCK_SPEAKER	= 0x01 << 7,
++	SEC_EXTRA_ANT_DEVICE		= 0x01 << 8,	
++	SEC_UNKNOWN_DEVICE		= 0x01 << 9,
++};
++
++struct sec_jack_zone {
++	unsigned int adc_high;
++	unsigned int delay_ms;
++	unsigned int check_count;
++	unsigned int jack_type;
++};
++
++struct sec_jack_buttons_zone {
++	unsigned int code;
++	unsigned int adc_low;
++	unsigned int adc_high;
++};
++
++struct sec_jack_platform_data {
++	int	det_gpio;
++	int	send_end_gpio;
++	int	ear_micbias_gpio;
++#ifdef CONFIG_RF_EAR_DET
++	int rf_ear_det_gpio;
++#endif
++	int ant_det_gpio;
++	bool	det_active_high;
++	bool	send_end_active_high;
++	bool	use_codec_micbias;
++	struct qpnp_vadc_chip		*vadc_dev;
++	struct sec_jack_zone jack_zones[6];
++	struct sec_jack_buttons_zone jack_buttons_zones[4];
++	struct pinctrl *jack_pinctrl;
++};
++
++#endif
++
++#endif
+diff -duprN mm/include/linux/skbuff.h n/include/linux/skbuff.h
+--- mm/include/linux/skbuff.h	2016-09-20 17:39:31.000000000 +0530
++++ n/include/linux/skbuff.h	2017-03-31 10:42:38.000000000 +0530
+@@ -2454,7 +2454,7 @@ extern int	       skb_copy_datagram_iove
+ 					       int size);
+ extern int	       skb_copy_and_csum_datagram_iovec(struct sk_buff *skb,
+ 							int hlen,
+-							struct iovec *iov);
++							struct iovec *iov, int len);
+ extern int	       skb_copy_datagram_from_iovec(struct sk_buff *skb,
+ 						    int offset,
+ 						    const struct iovec *from,
+diff -duprN mm/include/linux/sock_diag.h n/include/linux/sock_diag.h
+--- mm/include/linux/sock_diag.h	2016-09-20 17:39:30.000000000 +0530
++++ n/include/linux/sock_diag.h	2017-03-31 10:42:38.000000000 +0530
+@@ -11,6 +11,7 @@ struct sock;
+ struct sock_diag_handler {
+ 	__u8 family;
+ 	int (*dump)(struct sk_buff *skb, struct nlmsghdr *nlh);
++	int (*destroy)(struct sk_buff *skb, struct nlmsghdr *nlh);
+ };
+ 
+ int sock_diag_register(const struct sock_diag_handler *h);
+@@ -26,4 +27,5 @@ int sock_diag_put_meminfo(struct sock *s
+ int sock_diag_put_filterinfo(struct user_namespace *user_ns, struct sock *sk,
+ 			     struct sk_buff *skb, int attrtype);
+ 
++int sock_diag_destroy(struct sock *sk, int err);
+ #endif
+diff -duprN mm/include/linux/stlog.h n/include/linux/stlog.h
+--- mm/include/linux/stlog.h	2016-09-20 17:39:30.000000000 +0530
++++ n/include/linux/stlog.h	2017-03-31 10:42:38.000000000 +0530
+@@ -15,18 +15,16 @@
+ #define STLOG_FROM_READER           0
+ #define STLOG_FROM_PROC             1
+ 
+-#define CONFIG_STLOG
+-
+ int do_stlog(int type, char __user *buf, int count, bool from_file);
+ int do_stlog_write(int type, const char __user *buf, int count, bool from_file);
+ int vstlog(const char *fmt, va_list args);
+ int stlog(const char *fmt, ...);
+ 
+-#ifdef CONFIG_STLOG
++#ifdef CONFIG_PROC_STLOG
+ #define ST_LOG(fmt,...) stlog(fmt,##__VA_ARGS__)	
+ #else
+ #define ST_LOG(fmt,...) 
+-#endif /* CONFIG_STLOG */
++#endif /* CONFIG_PROC_STLOG */
+ 
+ 
+ #endif /* _STLOG_H */
+diff -duprN mm/include/linux/vbus_notifier.h n/include/linux/vbus_notifier.h
+--- mm/include/linux/vbus_notifier.h	1970-01-01 05:30:00.000000000 +0530
++++ n/include/linux/vbus_notifier.h	2017-03-31 10:42:39.000000000 +0530
+@@ -0,0 +1,76 @@
++/*
++ * include/linux/vbus_notifier.h
++ *
++ * header file supporting VBUS notifier call chain information
++ *
++ * Copyright (C) 2010 Samsung Electronics
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
++ *
++ */
++
++#ifndef __VBUS_NOTIFIER_H__
++#define __VBUS_NOTIFIER_H__
++
++/* VBUS notifier call chain command */
++typedef enum {
++	VBUS_NOTIFY_CMD_NONE = 0,
++	VBUS_NOTIFY_CMD_FALLING,
++	VBUS_NOTIFY_CMD_RISING,
++} vbus_notifier_cmd_t;
++
++/* VBUS notifier call sequence,
++ * largest priority number device will be called first. */
++typedef enum {
++	VBUS_NOTIFY_DEV_USB,
++	VBUS_NOTIFY_DEV_CHARGER,
++} vbus_notifier_device_t;
++
++typedef enum {
++	STATUS_VBUS_UNKNOWN = 0,
++	STATUS_VBUS_LOW,
++	STATUS_VBUS_HIGH,
++} vbus_status_t;
++
++typedef enum {
++	VBUS_NOTIFIER_NOT_READY = 0,
++	VBUS_NOTIFIER_NOT_READY_DETECT,
++	VBUS_NOTIFIER_READY,
++} vbus_notifier_stat_t;
++
++struct vbus_notifier_struct {
++	struct mutex		vbus_mutex;
++	vbus_notifier_stat_t	status;
++	vbus_status_t		vbus_type;
++	vbus_notifier_cmd_t	cmd;
++	struct blocking_notifier_head notifier_call_chain;
++};
++
++#define VBUS_NOTIFIER_BLOCK(name)	\
++	struct notifier_block (name)
++
++/* vbus notifier init/notify function
++ * this function is for JUST VBUS device driver.
++ * DON'T use function anywhrer else!!
++ */
++extern void vbus_notifier_handle(vbus_status_t new_dev);
++
++/* vbus notifier register/unregister API
++ * for used any where want to receive vbus attached device attach/detach. */
++extern int vbus_notifier_register(struct notifier_block *nb,
++		notifier_fn_t notifier, vbus_notifier_device_t listener);
++extern int vbus_notifier_unregister(struct notifier_block *nb);
++
++#endif /* __VBUS_NOTIFIER_H__ */
+diff -duprN mm/include/net/af_unix.h n/include/net/af_unix.h
+--- mm/include/net/af_unix.h	2016-09-20 17:39:32.000000000 +0530
++++ n/include/net/af_unix.h	2017-03-31 10:42:39.000000000 +0530
+@@ -6,8 +6,8 @@
+ #include <linux/mutex.h>
+ #include <net/sock.h>
+ 
+-extern void unix_inflight(struct file *fp);
+-extern void unix_notinflight(struct file *fp);
++void unix_inflight(struct user_struct *user, struct file *fp);
++void unix_notinflight(struct user_struct *user, struct file *fp);
+ extern void unix_gc(void);
+ extern void wait_for_unix_gc(void);
+ extern struct sock *unix_get_socket(struct file *filp);
+@@ -35,6 +35,7 @@ struct unix_skb_parms {
+ #ifdef CONFIG_SECURITY_NETWORK
+ 	u32			secid;		/* Security ID		*/
+ #endif
++	u32			consumed;
+ };
+ 
+ #define UNIXCB(skb) 	(*(struct unix_skb_parms *)&((skb)->cb))
+@@ -62,6 +63,7 @@ struct unix_sock {
+ #define UNIX_GC_CANDIDATE	0
+ #define UNIX_GC_MAYBE_CYCLE	1
+ 	struct socket_wq	peer_wq;
++	wait_queue_t		peer_wake;
+ };
+ #define unix_sk(__sk) ((struct unix_sock *)__sk)
+ 
+diff -duprN mm/include/net/ipv6.h n/include/net/ipv6.h
+--- mm/include/net/ipv6.h	2016-09-20 17:39:32.000000000 +0530
++++ n/include/net/ipv6.h	2017-03-31 10:42:39.000000000 +0530
+@@ -203,6 +203,7 @@ extern rwlock_t ip6_ra_lock;
+  */
+ 
+ struct ipv6_txoptions {
++	atomic_t		refcnt;
+ 	/* Length of this structure */
+ 	int			tot_len;
+ 
+@@ -215,7 +216,7 @@ struct ipv6_txoptions {
+ 	struct ipv6_opt_hdr	*dst0opt;
+ 	struct ipv6_rt_hdr	*srcrt;	/* Routing Header */
+ 	struct ipv6_opt_hdr	*dst1opt;
+-
++	struct rcu_head		rcu;
+ 	/* Option buffer, as read by IPV6_PKTOPTIONS, starts here. */
+ };
+ 
+@@ -246,6 +247,24 @@ struct ipv6_fl_socklist {
+ 	struct rcu_head			rcu;
+ };
+ 
++static inline struct ipv6_txoptions *txopt_get(const struct ipv6_pinfo *np)
++{
++	struct ipv6_txoptions *opt;
++
++	rcu_read_lock();
++	opt = rcu_dereference(np->opt);
++	if (opt && !atomic_inc_not_zero(&opt->refcnt))
++		opt = NULL;
++	rcu_read_unlock();
++	return opt;
++}
++
++static inline void txopt_put(struct ipv6_txoptions *opt)
++{
++	if (opt && atomic_dec_and_test(&opt->refcnt))
++		kfree_rcu(opt, rcu);
++}
++
+ extern struct ip6_flowlabel	*fl6_sock_lookup(struct sock *sk, __be32 label);
+ extern struct ipv6_txoptions	*fl6_merge_options(struct ipv6_txoptions * opt_space,
+ 						   struct ip6_flowlabel * fl,
+diff -duprN mm/include/net/scm.h n/include/net/scm.h
+--- mm/include/net/scm.h	2016-09-20 17:39:33.000000000 +0530
++++ n/include/net/scm.h	2017-03-31 10:42:39.000000000 +0530
+@@ -21,6 +21,7 @@ struct scm_creds {
+ struct scm_fp_list {
+ 	short			count;
+ 	short			max;
++	struct user_struct	*user;
+ 	struct file		*fp[SCM_MAX_FD];
+ };
+ 
+diff -duprN mm/include/net/sock.h n/include/net/sock.h
+--- mm/include/net/sock.h	2016-09-20 17:39:47.000000000 +0530
++++ n/include/net/sock.h	2017-03-31 10:42:39.000000000 +0530
+@@ -1009,6 +1009,7 @@ struct proto {
+ 	void			(*destroy_cgroup)(struct mem_cgroup *memcg);
+ 	struct cg_proto		*(*proto_cgroup)(struct mem_cgroup *memcg);
+ #endif
++	int			(*diag_destroy)(struct sock *sk, int err);
+ };
+ 
+ /*
+diff -duprN mm/include/net/tcp.h n/include/net/tcp.h
+--- mm/include/net/tcp.h	2016-09-20 17:39:33.000000000 +0530
++++ n/include/net/tcp.h	2017-03-31 10:42:39.000000000 +0530
+@@ -1056,6 +1056,8 @@ extern void tcp_set_state(struct sock *s
+ 
+ extern void tcp_done(struct sock *sk);
+ 
++int tcp_abort(struct sock *sk, int err);
++
+ static inline void tcp_sack_reset(struct tcp_options_received *rx_opt)
+ {
+ 	rx_opt->dsack = 0;
+@@ -1404,6 +1406,8 @@ static inline void tcp_check_send_head(s
+ {
+ 	if (sk->sk_send_head == skb_unlinked)
+ 		sk->sk_send_head = NULL;
++	if (tcp_sk(sk)->highest_sack == skb_unlinked)
++		tcp_sk(sk)->highest_sack = NULL;
+ }
+ 
+ static inline void tcp_init_send_head(struct sock *sk)
+diff -duprN mm/include/sdp/dlp_ioctl.h n/include/sdp/dlp_ioctl.h
+--- mm/include/sdp/dlp_ioctl.h	2016-09-20 17:39:34.000000000 +0530
++++ n/include/sdp/dlp_ioctl.h	2017-03-31 10:42:40.000000000 +0530
+@@ -26,12 +26,19 @@
+ #define DLP_DEV_PATH	"/dev/sdp_dlp"
+ 
+ #define __DLPIOC		0x78
++#define MAX_EXT_LENGTH 1000 
+ 
+ typedef struct _dlp_lock_set {
+ 	int user_id;
+ } dlp_lock_set;
+ 
++typedef struct _dlp_extension_set {
++	int user_id;
++	char extensions[MAX_EXT_LENGTH+1];
++} dlp_extension_set;
++
+ #define DLP_LOCK_ENABLE		_IOW(__DLPIOC, 1, dlp_lock_set)
+ #define DLP_LOCK_DISABLE	_IOW(__DLPIOC, 2, dlp_lock_set)
++#define DLP_EXTENSION_SET	_IOW(__DLPIOC, 3, dlp_extension_set)
+ 
+ #endif /* DLP_IOCTL_H_ */
+diff -duprN mm/include/sdp/fs_request.h n/include/sdp/fs_request.h
+--- mm/include/sdp/fs_request.h	2016-09-20 17:39:34.000000000 +0530
++++ n/include/sdp/fs_request.h	2017-03-31 10:42:40.000000000 +0530
+@@ -31,6 +31,9 @@
+ #define FSOP_DLP_FILE_INIT_RESTRICTED     24
+ #define FSOP_DLP_FILE_REMOVE     25
+ #define FSOP_DLP_FILE_RENAME     26
++#define FSOP_DLP_FILE_ACCESS_DENIED     27
++#define FSOP_DLP_FILE_OPENED_CREATOR    28
++#define FSOP_DLP_FILE_REMOVE_MEDIA     29
+ 
+ #define FSOP_AUDIT_FAIL_ENCRYPT		51
+ #define FSOP_AUDIT_FAIL_DECRYPT		52
+diff -duprN mm/include/sdp/sdp_dlp.h n/include/sdp/sdp_dlp.h
+--- mm/include/sdp/sdp_dlp.h	2016-09-20 17:39:34.000000000 +0530
++++ n/include/sdp/sdp_dlp.h	2017-03-31 10:42:40.000000000 +0530
+@@ -21,6 +21,6 @@
+ #define _SDP_DLP_H
+ 
+ bool dlp_is_locked(int user_id);
+-int dlp_isInterestedFile(const char *filename);
++int dlp_isInterestedFile(int user_id, const char *filename);
+ 
+ #endif /* _SDP_DLP_H */
+diff -duprN mm/include/uapi/linux/audit.h n/include/uapi/linux/audit.h
+--- mm/include/uapi/linux/audit.h	2016-09-20 17:39:54.000000000 +0530
++++ n/include/uapi/linux/audit.h	2017-03-31 10:42:40.000000000 +0530
+@@ -325,6 +325,8 @@ enum {
+ /* distinguish syscall tables */
+ #define __AUDIT_ARCH_64BIT 0x80000000
+ #define __AUDIT_ARCH_LE	   0x40000000
++
++#define AUDIT_ARCH_AARCH64	(EM_AARCH64|__AUDIT_ARCH_64BIT|__AUDIT_ARCH_LE)
+ #define AUDIT_ARCH_ALPHA	(EM_ALPHA|__AUDIT_ARCH_64BIT|__AUDIT_ARCH_LE)
+ #define AUDIT_ARCH_ARM		(EM_ARM|__AUDIT_ARCH_LE)
+ #define AUDIT_ARCH_ARMEB	(EM_ARM)
+diff -duprN mm/include/uapi/linux/fs.h n/include/uapi/linux/fs.h
+--- mm/include/uapi/linux/fs.h	2016-09-20 17:39:55.000000000 +0530
++++ n/include/uapi/linux/fs.h	2017-03-31 10:42:40.000000000 +0530
+@@ -54,6 +54,9 @@ struct inodes_stat_t {
+ 	int dummy[5];		/* padding for sysctl ABI compatibility */
+ };
+ 
++struct ci_lookup_data {
++	char d[PATH_MAX];
++};
+ 
+ #define NR_FILE  8192	/* this can well be larger on a larger system */
+ 
+@@ -165,6 +168,7 @@ struct inodes_stat_t {
+ #define FS_IOC32_SETVERSION		_IOW('v', 2, int)
+ 
+ #define FS_IOC_INVAL_MAPPING		_IO('f', 13)
++#define FS_IOC_CI_LOOKUP		_IOWR('f', 15, struct ci_lookup_data)
+ 
+ /*
+  * Inode flags (FS_IOC_GETFLAGS / FS_IOC_SETFLAGS)
+diff -duprN mm/include/uapi/linux/fuse.h n/include/uapi/linux/fuse.h
+--- mm/include/uapi/linux/fuse.h	2016-09-20 17:39:55.000000000 +0530
++++ n/include/uapi/linux/fuse.h	2017-03-31 10:42:40.000000000 +0530
+@@ -237,6 +237,9 @@ struct fuse_file_lock {
+ #define FUSE_READDIRPLUS_AUTO	(1 << 14)
+ #define FUSE_ASYNC_DIO		(1 << 15)
+ 
++#define FUSE_RESERVE_SPACE	(1 << 30)
++#define FUSE_SHORTCIRCUIT	(1 << 31)
++
+ /**
+  * CUSE INIT request/reply flags
+  *
+@@ -459,7 +462,7 @@ struct fuse_create_in {
+ struct fuse_open_out {
+ 	uint64_t	fh;
+ 	uint32_t	open_flags;
+-	uint32_t	padding;
++	int32_t         lower_fd;/* lower layer file descriptor */
+ };
+ 
+ struct fuse_release_in {
+@@ -562,6 +565,8 @@ struct fuse_init_out {
+ 	uint16_t	max_background;
+ 	uint16_t	congestion_threshold;
+ 	uint32_t	max_write;
++	uint32_t	reserved_space_mb;
++	uint32_t	padding;
+ };
+ 
+ #define CUSE_INIT_INFO_MAX 4096
+diff -duprN mm/include/uapi/linux/pkt_sched.h n/include/uapi/linux/pkt_sched.h
+--- mm/include/uapi/linux/pkt_sched.h	2016-09-20 17:39:56.000000000 +0530
++++ n/include/uapi/linux/pkt_sched.h	2017-03-31 10:42:40.000000000 +0530
+@@ -118,6 +118,7 @@ struct tc_fifo_qopt {
+ struct tc_prio_qopt {
+ 	int	bands;			/* Number of bands */
+ 	__u8	priomap[TC_PRIO_MAX+1];	/* Map: logical priority -> PRIO band */
++	__u8	enable_flow;		/* Enable dequeue */
+ };
+ 
+ /* MULTIQ section */
+diff -duprN mm/include/uapi/linux/sock_diag.h n/include/uapi/linux/sock_diag.h
+--- mm/include/uapi/linux/sock_diag.h	2016-09-20 17:39:54.000000000 +0530
++++ n/include/uapi/linux/sock_diag.h	2017-03-31 10:42:41.000000000 +0530
+@@ -4,6 +4,7 @@
+ #include <linux/types.h>
+ 
+ #define SOCK_DIAG_BY_FAMILY 20
++#define SOCK_DESTROY_BACKPORT 21
+ 
+ struct sock_diag_req {
+ 	__u8	sdiag_family;
